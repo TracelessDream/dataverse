@@ -6,14 +6,17 @@
 package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 /**
  *
@@ -30,6 +33,13 @@ import javax.persistence.NamedQuery;
             query = "select f from DataverseFieldTypeInputLevel f where f.dataverse.id = :dataverseId and f.datasetFieldType.id in :datasetFieldIdList")
  
 })
+@Table(name="DataverseFieldTypeInputLevel"
+        ,  uniqueConstraints={
+            @UniqueConstraint(columnNames={"dataverse_id", "datasetfieldtype_id"})}
+        , indexes = {@Index(columnList="dataverse_id")
+		, @Index(columnList="datasetfieldtype_id")
+		, @Index(columnList="required")}
+)
 @Entity
 public class DataverseFieldTypeInputLevel implements Serializable {
 
@@ -47,6 +57,15 @@ public class DataverseFieldTypeInputLevel implements Serializable {
     private DatasetFieldType datasetFieldType;
     private boolean include;
     private boolean required;
+    
+    public DataverseFieldTypeInputLevel () {}
+  
+    public DataverseFieldTypeInputLevel (DatasetFieldType fieldType, Dataverse dataverse, boolean required, boolean include) {
+        this.datasetFieldType = fieldType;
+        this.dataverse = dataverse;
+        this.required = required;
+        this.include = include;
+    }    
 
     public Long getId() {
         return id;

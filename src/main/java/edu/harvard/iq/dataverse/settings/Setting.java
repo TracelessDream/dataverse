@@ -2,11 +2,13 @@ package edu.harvard.iq.dataverse.settings;
 
 import java.io.Serializable;
 import java.util.Objects;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
 
 /**
  * A single value in the config of dataverse.
@@ -14,15 +16,29 @@ import javax.persistence.NamedQuery;
  */
 @NamedQueries({
     @NamedQuery( name="Setting.deleteByName",
-                query="DELETE FROM Setting s WHERE s.name=:name"),
+                query="DELETE FROM Setting s WHERE s.name=:name AND s.lang IS NULL"),
     @NamedQuery( name="Setting.findAll",
-                query="SELECT s FROM Setting s")
+                query="SELECT s FROM Setting s"),
+    @NamedQuery( name="Setting.findByName",
+            query = "SELECT s FROM Setting s WHERE s.name=:name AND s.lang IS NULL" ),
+    @NamedQuery( name="Setting.deleteByNameAndLang",
+            query="DELETE FROM Setting s WHERE s.name=:name AND s.lang=:lang"),
+    @NamedQuery( name="Setting.findByNameAndLang",
+                query = "SELECT s FROM Setting s WHERE s.name=:name AND s.lang=:lang" )
+
 })
 @Entity
 public class Setting implements Serializable {
-    
+
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(columnDefinition = "TEXT")
     private String name;
+
+    @Column(columnDefinition = "TEXT")
+    private String lang;
 
     @Column(columnDefinition = "TEXT")
     private String content;
@@ -31,8 +47,14 @@ public class Setting implements Serializable {
     }
 
     public Setting(String name, String content) {
+       this.name = name;
+       this.content = content;
+    }
+
+    public Setting(String name, String lang, String content) {
         this.name = name;
         this.content = content;
+        this.lang = lang;
     }
 
     public String getName() {
@@ -49,6 +71,14 @@ public class Setting implements Serializable {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getLang() {
+        return lang;
+    }
+
+    public void setLang(String lang) {
+        this.lang = lang;
     }
 
     @Override

@@ -2,11 +2,13 @@ package edu.harvard.iq.dataverse.authorization.providers;
 
 import edu.harvard.iq.dataverse.authorization.AuthenticationProvider;
 import java.util.Objects;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.Lob;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.Lob;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  * Database-storable form of an {@code AuthenticationProvider}.
@@ -19,15 +21,22 @@ import javax.persistence.NamedQuery;
 @NamedQueries({
     @NamedQuery( name="AuthenticationProviderRow.findAllEnabled",
                  query="SELECT r FROM AuthenticationProviderRow r WHERE r.enabled=true" ),
+    @NamedQuery( name="AuthenticationProviderRow.findById",
+                 query="SELECT r FROM AuthenticationProviderRow r WHERE r.id=:id" ),
     @NamedQuery( name="AuthenticationProviderRow.findAll",
                  query="SELECT r FROM AuthenticationProviderRow r" )
 })
 @Entity
+@Table(indexes = {@Index(columnList="enabled")})
 public class AuthenticationProviderRow implements java.io.Serializable {
     
     @Id
     private String id;
-    
+
+    /**
+     * @todo Consider dropping this column since we override title in order to
+     * internationalize it. Or add a translatableTitle field?
+     */
     private String title;
     
     private String subtitle;

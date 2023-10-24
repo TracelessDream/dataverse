@@ -7,13 +7,12 @@
 package edu.harvard.iq.dataverse.datavariable;
 
 import java.util.List;
-import java.util.Iterator;
-import java.util.logging.Logger;
-import javax.ejb.Stateless;
-import javax.inject.Named;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-import javax.persistence.Query;
+
+import jakarta.ejb.Stateless;
+import jakarta.inject.Named;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.TypedQuery;
 
 /**
  *
@@ -38,19 +37,58 @@ public class VariableServiceBean {
     }
 
     public DataVariable find(Object pk) {
-        return (DataVariable) em.find(DataVariable.class, pk);
+        return em.find(DataVariable.class, pk);
     }    
     
     public List<DataVariable> findByDataFileId(Long fileId) {
-         Query query = em.createQuery("select object(o) from DataVariable as o where o.dataTable.dataFile.id =:fileId order by o.fileOrder");
+         TypedQuery<DataVariable> query = em.createQuery("select object(o) from DataVariable as o where o.dataTable.dataFile.id =:fileId order by o.fileOrder", DataVariable.class);
          query.setParameter("fileId", fileId);
          return query.getResultList();
     }
     
     public List<DataVariable> findByDataTableId(Long dtId) {
-         Query query = em.createQuery("select object(o) from DataVariable as o where o.dataTable.id =:dtId order by o.fileOrder");
+         TypedQuery<DataVariable> query = em.createQuery("select object(o) from DataVariable as o where o.dataTable.id =:dtId order by o.fileOrder", DataVariable.class);
          query.setParameter("dtId", dtId);
          return query.getResultList();
+    }
+
+    public List<VariableMetadata> findByDataVarIdAndFileMetaId(Long datVarId, Long metaId) {
+        TypedQuery<VariableMetadata> query = em.createQuery("SELECT object(o) FROM VariableMetadata as o where o.dataVariable.id =:dvId and o.fileMetadata.id =:fmId", VariableMetadata.class);
+
+        query.setParameter("dvId", datVarId);
+        query.setParameter("fmId", metaId);
+        return query.getResultList();
+
+    }
+
+    public List<VariableMetadata> findVarMetByFileMetaId(Long metaId) {
+        TypedQuery<VariableMetadata> query = em.createQuery("SELECT object(o) FROM VariableMetadata as o where o.fileMetadata.id =:fmId", VariableMetadata.class);
+
+        query.setParameter("fmId", metaId);
+        return query.getResultList();
+
+    }
+    public List<VariableCategory> findCategory(Long varId, String catValue) {
+        TypedQuery<VariableCategory> query = em.createQuery("SELECT object(o) FROM VariableCategory as o where o.dataVariable.id =:varId and o.value =:catValue", VariableCategory.class);
+
+        query.setParameter("varId", varId);
+        query.setParameter("catValue", catValue);
+        return query.getResultList();
+    }
+
+    public List<CategoryMetadata> findCategoryMetadata(Long catId, Long varMetId) {
+        TypedQuery<CategoryMetadata> query = em.createQuery("SELECT object(o) FROM CategoryMetadata as o where o.variableMetadata.id =:varMetId and o.category.id =:catId", CategoryMetadata.class);
+
+        query.setParameter("catId", catId);
+        query.setParameter("varMetId", varMetId);
+        return query.getResultList();
+    }
+
+    public List<VarGroup> findAllGroupsByFileMetadata(Long fileMetaId) {
+        TypedQuery<VarGroup> query = em.createQuery("SELECT object(o) FROM VarGroup as o where o.fileMetadata.id =:fileMetaId", VarGroup.class);
+        query.setParameter("fileMetaId", fileMetaId);
+
+        return query.getResultList();
     }
     
     /* 
@@ -67,7 +105,7 @@ public class VariableServiceBean {
         VariableFormatType type = null;
         try {
             type = (VariableFormatType)query.getSingleResult();
-        } catch (javax.persistence.NoResultException e) {
+        } catch (jakarta.persistence.NoResultException e) {
             // DO nothing, just return null.
         }
         return type;
@@ -78,7 +116,7 @@ public class VariableServiceBean {
         VariableIntervalType type = null;
         try {
             type=(VariableIntervalType)em.createQuery(query).getSingleResult();
-        } catch (javax.persistence.NoResultException e) {
+        } catch (jakarta.persistence.NoResultException e) {
             // DO nothing, just return null.
         }
         return type;
@@ -89,7 +127,7 @@ public class VariableServiceBean {
         SummaryStatisticType type = null;
         try {
             type = (SummaryStatisticType) em.createQuery(query).getSingleResult();
-        } catch (javax.persistence.NoResultException e) {
+        } catch (jakarta.persistence.NoResultException e) {
             // DO nothing, just return null.
         }
         return type;

@@ -8,14 +8,16 @@ package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
 import java.util.Objects;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -29,6 +31,9 @@ import javax.persistence.NamedQuery;
 })
 
 @Entity
+@Table(indexes = {@Index(columnList="dataverse_id")
+		, @Index(columnList="datasetfieldtype_id")
+		, @Index(columnList="displayorder")})
 public class DataverseFacet implements Serializable {
     private static final long serialVersionUID = 1L;
 
@@ -88,7 +93,7 @@ public class DataverseFacet implements Serializable {
 
     @Override
     public boolean equals(Object object) {
-        if (!(object instanceof DatasetFieldType)) {
+        if (!(object instanceof DataverseFacet)) {
             return false;
         }
         DataverseFacet other = (DataverseFacet) object;

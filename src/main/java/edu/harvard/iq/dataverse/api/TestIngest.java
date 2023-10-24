@@ -7,31 +7,33 @@
 package edu.harvard.iq.dataverse.api;
 
 import edu.harvard.iq.dataverse.DataFile;
-import edu.harvard.iq.dataverse.DataFileServiceBean;
 import edu.harvard.iq.dataverse.DataTable;
+import edu.harvard.iq.dataverse.Dataset;
 import edu.harvard.iq.dataverse.DatasetServiceBean;
 import edu.harvard.iq.dataverse.FileMetadata;
 import edu.harvard.iq.dataverse.ingest.IngestServiceBean;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataFileReader;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataIngest;
 import edu.harvard.iq.dataverse.util.FileUtil;
+import edu.harvard.iq.dataverse.util.StringUtil;
 import java.io.BufferedInputStream;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
+import jakarta.ejb.EJB;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import javax.ws.rs.GET;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.UriInfo;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.UriInfo;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.ws.rs.QueryParam;
 
 
 
@@ -56,8 +58,6 @@ import javax.servlet.http.HttpServletResponse;
 public class TestIngest {
     private static final Logger logger = Logger.getLogger(TestIngest.class.getCanonicalName());
     
-    @EJB
-    DataFileServiceBean dataFileService;
     @EJB 
     DatasetServiceBean datasetService; 
     @EJB
@@ -65,40 +65,31 @@ public class TestIngest {
 
     //@EJB
     
-    @Path("test/{fileName}/{fileType}")
+    @Path("test/file")
     @GET
     @Produces({ "text/plain" })
-    public String datafile(@PathParam("fileName") String fileName, @PathParam("fileType") String fileType, @Context UriInfo uriInfo, @Context HttpHeaders headers, @Context HttpServletResponse response) /*throws NotFoundException, ServiceUnavailableException, PermissionDeniedException, AuthorizationRequiredException*/ {        
+    public String datafile(@QueryParam("fileName") String fileName, @QueryParam("fileType") String fileType, @Context UriInfo uriInfo, @Context HttpHeaders headers, @Context HttpServletResponse response) /*throws NotFoundException, ServiceUnavailableException, PermissionDeniedException, AuthorizationRequiredException*/ {        
         String output = "";
 
-        if (fileName == null || fileType == null || "".equals(fileName) || "".equals(fileType)) {
-            output = output.concat("Usage: java edu.harvard.iq.dataverse.ingest.IngestServiceBean <file> <type>.");
+        if (StringUtil.isEmpty(fileName) || StringUtil.isEmpty(fileType)) {
+            output = output.concat("Usage: /api/ingest/test/file?fileName=PATH&fileType=TYPE");
             return output; 
         }
         
         BufferedInputStream fileInputStream = null; 
         
-        String absoluteFilePath = null; 
-        if (fileType.equals("x-stata")) {
-            absoluteFilePath = "/usr/share/data/retest_stata/reingest/" + fileName;
-        } else if (fileType.equals("x-spss-sav")) {
-            absoluteFilePath = "/usr/share/data/retest_sav/reingest/" + fileName;
-        } else if (fileType.equals("x-spss-por")) {
-            absoluteFilePath = "/usr/share/data/retest_por/reingest/" + fileName; 
-        }
         
         try {
-            fileInputStream = new BufferedInputStream(new FileInputStream(new File(absoluteFilePath)));
+            fileInputStream = new BufferedInputStream(new FileInputStream(new File(fileName)));
         } catch (FileNotFoundException notfoundEx) {
             fileInputStream = null; 
         }
         
         if (fileInputStream == null) {
-            output = output.concat("Could not open file "+absoluteFilePath+".");
+            output = output.concat("Could not open file "+fileName+".");
             return output;
         }
         
-        fileType = "application/"+fileType; 
         TabularDataFileReader ingestPlugin = ingestService.getTabDataReaderByMimeType(fileType);
 
         if (ingestPlugin == null) {
@@ -111,7 +102,7 @@ public class TestIngest {
         try {
             tabDataIngest = ingestPlugin.read(fileInputStream, null);
         } catch (IOException ingestEx) {
-            output = output.concat("Caught an exception trying to ingest file "+fileName+".");
+            output = output.concat("Caught an exception trying to ingest file " + fileName + ": " + ingestEx.getLocalizedMessage());
             return output;
         }
         
@@ -123,14 +114,16 @@ public class TestIngest {
                         && tabFile != null
                         && tabFile.exists()) {
 
-                    String tabFilename = FileUtil.replaceExtension(absoluteFilePath, "tab");
+                    String tabFilename = FileUtil.replaceExtension(fileName, "tab");
                     
                     java.nio.file.Files.copy(Paths.get(tabFile.getAbsolutePath()), Paths.get(tabFilename), StandardCopyOption.REPLACE_EXISTING);
                     
                     DataTable dataTable = tabDataIngest.getDataTable();
                     
                     DataFile dataFile = new DataFile();
-                    dataFile.setFileSystemName(tabFilename);
+                    dataFile.setStorageIdentifier(tabFilename);
+                    Dataset dataset = new Dataset();
+                    dataFile.setOwner(dataset);
                     
                     FileMetadata fileMetadata = new FileMetadata();
                     fileMetadata.setLabel(fileName);
@@ -145,7 +138,7 @@ public class TestIngest {
                     output = output.concat ("NOBS: "+dataTable.getCaseQuantity()+"\n");
                     
                     try {
-                        ingestService.produceSummaryStatistics(dataFile);
+                        ingestService.produceSummaryStatistics(dataFile, tabFile);
                         output = output.concat ("UNF: "+dataTable.getUnf()+"\n");
                     } catch (IOException ioex) {
                         output = output.concat ("UNF: failed to calculate\n"+"\n");

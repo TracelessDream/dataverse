@@ -7,16 +7,18 @@
 package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 import java.util.List;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.OneToMany;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Index;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -28,6 +30,7 @@ import javax.persistence.OneToMany;
     @NamedQuery( name="ForeignMetadataFormatMapping.findByName", query = "SELECT fmfm FROM ForeignMetadataFormatMapping fmfm WHERE fmfm.name=:name")
 })
 @Entity
+@Table(indexes = {@Index(columnList="name")})
 public class ForeignMetadataFormatMapping implements Serializable {
     private static final long serialVersionUID = 1L;
     @Id

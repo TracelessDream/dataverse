@@ -2,6 +2,7 @@ library(foreign)
 library(stats)
 library(methods)
 library(R2HTML)
+library(haven)
 
 options(digits.secs = 3)
 
@@ -59,23 +60,23 @@ read.dataverseTabData<-function (file, header = FALSE, sep = "\t", quote = "", d
     for (i in 1:cols) {
         if (colClassesx[i] == 0) {
 
-	     # Make sure the character values are handled as such:
-	     data[[i]]<-as.character(data[[i]]);
-	     # And replace empty strings with NAs:
-	     data[[i]][ data[[i]] == '' ]<-NA
-	     # And remove the double quotes we had put around the non-missing
- 	     # string values as they were stored in the TAB files:
+         # Make sure the character values are handled as such:
+         data[[i]]<-as.character(data[[i]]);
+         # And replace empty strings with NAs:
+         data[[i]][ data[[i]] == '' ]<-NA
+         # And remove the double quotes we had put around the non-missing
+         # string values as they were stored in the TAB files:
 
-	     data[[i]]<-sub("^\"", "", data[[i]])
-	     data[[i]]<-sub("\"$", "", data[[i]])
+         data[[i]]<-sub("^\"", "", data[[i]])
+         data[[i]]<-sub("\"$", "", data[[i]])
 
-	     # Special processing for dates and times:
+         # Special processing for dates and times:
             
              if (is.null(unlist(varFormat[col.names[i]]))){
                 data[[i]] <- as(data[[i]], "character")
              } else if (!is.null(unlist(varFormat[col.names[i]]))){
                 if (varFormat[col.names[i]] == 'D'){
-		    data[[i]]<-as.Date(data[[i]]);
+	            data[[i]]<-as.Date(data[[i]]);
                     colClassesx[i]<-1
                 } else if (varFormat[col.names[i]] == 'T'){
                     data[[i]]<-as.POSIXct(strptime(data[[i]], "%T"))
@@ -90,24 +91,24 @@ read.dataverseTabData<-function (file, header = FALSE, sep = "\t", quote = "", d
              }
         } else if (colClassesx[i] == 3) {
 
-	     # special case for Boolean/logical variables: 
-	     # (these will be passed from the application as vectors of 0s and 1s)
-	     # also, note that this type will be used only when the subset is 
-	     # created as part of the "save-as" functionality. When it's for 
-	     # analysis, the DVN "boolean" variable will be of type 1, because 
-	     # they will be handled as regular integer categoricals with the labels 
-	     # "TRUE" and "FALSE". -- L.A. 
+         # special case for Boolean/logical variables: 
+         # (these will be passed from the application as vectors of 0s and 1s)
+         # also, note that this type will be used only when the subset is 
+         # created as part of the "save-as" functionality. When it's for 
+         # analysis, the DVN "boolean" variable will be of type 1, because 
+         # they will be handled as regular integer categoricals with the labels 
+         # "TRUE" and "FALSE". -- L.A. 
 
-	     for (j in 1:length(data[[i]])) {
-	     	 if (!is.na(data[[i]][j]) && data[[i]][j] == "") { 
-	       	    data[[i]][j]<-NA 
-	    	 }
-	     }
+         for (j in 1:length(data[[i]])) {
+             if (!is.na(data[[i]][j]) && data[[i]][j] == "") { 
+                data[[i]][j]<-NA 
+             }
+         }
 
-	     data[[i]]<-as.logical(as.numeric(data[[i]]))
+         data[[i]]<-as.logical(as.numeric(data[[i]]))
 
         } else {
-	    # Numeric values: 
+        # Numeric values: 
             data[[i]]<-type.convert(data[[i]], dec = dec)
         }
     }
@@ -241,13 +242,14 @@ createDataverseDataFrame<-function(dtfrm, dwnldoptn, dsnprfx) {
     # dwnldoptn(=z2)    data download option
     # dsnprfx(=z3)      dataset name prefix
 
-# The portion of code immediately below has been added to 
-# convert extra metadata, such as value labels, supplied in
-# the proprietary attributes (below) into standard R notations,
-# such as "comments" for variable labels and "factors" for 
-# value labels. 
+# The code below converts vectors representing Dataverse 
+# categorical variables into R factors. It also stores
+# variable labels as R "comments". 
 # 
 # This is still work in progress! -- L.A. 
+
+    #DBG<-TRUE
+    DBG<-FALSE
 
     NAMESET<-names(dtfrm)
     VARLABELS<-attr(dtfrm,"var.labels")
@@ -264,91 +266,120 @@ createDataverseDataFrame<-function(dtfrm, dwnldoptn, dsnprfx) {
     MISSVALTABLE <- attr(x,"missval.table")
 
     for (i in 1:length(x)) {
-        # cat("inside the for loop\n")
-	# cat("class: ")
-	# cat(class(x[[i]]))
-	# cat("\n")
-	# Recoding discrete, categorical variables as R factors;
-	# But, (experimental...) only if there are value labels supplied. 
-	# This means, among other things, that an ingested R character, 
-	# or integer vector would stay a vector, and not a factor, 
-	# in a saved-as-R subset.  
+        # Recoding discrete, categorical variables as R factors;
+	# using the value labels maps supplied by the Dataverse.
 
+	if (DBG) {
+            # cat("inside the for loop\n")
+            # cat("class: ")
+            # cat(class(x[[i]]))
+            # cat("\n")
+            cat("VAR TYPE: ",paste(VARTYPE[i],"\n",sep=""))
+	}
 
-	# -- L.A.
-	
 	if (!is.null(VARTYPE) && VARTYPE[i]<2) {
 
-	if (!(is.null(VALINDEX[[as.character(i)]]))) {
+            if (!(is.null(VALINDEX[[as.character(i)]]))) {
 
-            vti <- VALTABLE[[VALINDEX[[as.character(i)]]]]
-	    # cat(paste(class(vti),"\n"))
-	    # cat(paste(length(vti),"\n"))
-	    # cat(paste("VTI", vti, "\n", sep=" : "))
+                vti <- VALTABLE[[VALINDEX[[as.character(i)]]]]
+                # cat(paste(class(vti),"\n"))
+                # cat(paste(length(vti),"\n"))
+                # cat(paste("VTI", vti, "\n", sep=" : "))
 
-	  if (is.numeric(x[[i]])) {
-	     vtilevels<-as.numeric(names(vti))
-          } else {
-	    vtilevels<-names(vti) 
-          }
+                # if the type is > 0 - i.e., numeric, we'll treat the levels
+                # as numeric values. we'll treat them as strings otherwise:
 
-          # save / re-attach date/time-related class name
-	  classToken <- class(x[[i]])
-          vlevsi <- as.list(sort(unique.default(c(x[[i]],vtilevels))))
-          if ((classToken[1] == "Date") || (classToken[1] == "POSIXt")) {
-	      class(vlevsi)<- classToken
-	  }
+                if (is.numeric(x[[i]])) {
+                    vtilevels<-as.numeric(names(vti))
+                } else {
+                    vtilevels<-names(vti) 
+                }
 
-	  names(vlevsi)<-vlevsi
-          tmatch<-na.omit(match(names(vti),names(vlevsi)))
-          if (length(tmatch)>0) {
-	      names(vlevsi)[tmatch] <- vti
-	  }
+                
+                # This is potentially important: I'm removing x[[i]] from the 
+                # expression below. Meaning, I'm not using the values from the 
+                # data vector when converting it into a factor; instead we are
+                # going to solely rely on the value labels supplied by the 
+                # application. -- L.A. Dataverse 4.3, Feb. 2016
+                ###vlevsi <- as.list(sort(unique.default(c(x[[i]],vtilevels))))
+                vlevsi <- as.list(sort(unique.default(c(vtilevels))))
 
-	  mti<-integer(0);
-	  mti<-integer(0);
-	  if (!is.null(MISSVALINDEX[[as.character(i)]])) {
-	    mti<-MISSVALTABLE[[MISSVALINDEX[[as.character(i)]]]]
-	    tmatch<-na.omit(match(mti,vlevsi))
-	    if (length(tmatch)>0) {
-	      vlevsi[tmatch]<-NULL
-	    }
-	  }
+                # save / re-attach date/time-related class name
+                classToken <- class(x[[i]])
 
-	if (!(is.null(VALORDER[[as.character(i)]]))) {
-	   # cat("ordered value labels supplied")
-		x[[i]]  <-  factor(x[[i]],
-				levels=VALORDER[[as.character(i)]],
-				ordered=TRUE)
-	} else {
-	  # cat("no ordered value labels supplied\n")
-	  # cat(paste(VARTYPE[i],"\n",sep=""))
-	  # cat(paste(length(vlevsi),"\n",sep=""))
-	  # orderedfct<-(VARTYPE[i]>0 && ((length(vlevsi)-length(mti)>2)))
-          # cat(paste(as.character(orderedfct),"\n", sep=""))
-	  # paste("MTI", mti,"\n",sep=" : ")
-	  # paste("VLEVSI", vlevsi,"\n",sep=" : ")
+                if ((classToken[1] == "Date") || (classToken[1] == "POSIXt")) {
+                    class(vlevsi)<- classToken
+                }
+
+                names(vlevsi)<-vlevsi
+                tmatch<-na.omit(match(names(vti),names(vlevsi)))
+                if (length(tmatch)>0) {
+                    names(vlevsi)[tmatch] <- vti
+                }
+
+                mti<-integer(0);
+                mti<-integer(0);
+                if (!is.null(MISSVALINDEX[[as.character(i)]])) {
+                    mti<-MISSVALTABLE[[MISSVALINDEX[[as.character(i)]]]]
+                    tmatch<-na.omit(match(mti,vlevsi))
+                    if (length(tmatch)>0) {
+                        vlevsi[tmatch]<-NULL
+                    }
+                }
+
+                if (!(is.null(VALORDER[[as.character(i)]]))) {
+                    # A list of ordered value labels has been supplied.
+                    # This really means that we are restoring a vector from a tabular data file
+                    # that was produced from an ingested R data frame (no other format that we 
+                    # support has ordered categoricals!). In which case we don't need to worry about
+                    # the type of the vector (all R factors are character, really), and we don't 
+                    # need to bother providing both labels and levels (like further below) - 
+                    # because in the categorical variables produced from R files, these will 
+                    # be the same. 
+
+                    # cat("ordered value labels supplied")
+                    x[[i]]  <-  factor(x[[i]],
+		    		levels=VALORDER[[as.character(i)]],
+                    		ordered=TRUE)
+                } else {
+                    if (DBG) {
+                        cat("no ordered value labels supplied\n")
+                        cat(paste(length(vlevsi),"\n",sep=""))
+                        orderedfct<-(VARTYPE[i]>0 && ((length(vlevsi)-length(mti)>2)))
+                        cat(paste(as.character(orderedfct),"\n", sep=""))
+                        cat(paste("MTI", mti,"\n",sep=" : "))
+                        cat(paste("VLEVSI", vlevsi,"\n",sep=" : "))
+                    }
 	  
-		x[[i]]  <-  factor(x[[i]],
+                    x[[i]]  <-  factor(x[[i]],
 	        		levels=vlevsi,
 			     	labels=names(vlevsi),
 			     	ordered=(VARTYPE[i]>0 && ((length(vlevsi)-length(mti)>2))))
-	}
+                }
 
-	attr(x,"vlevsi")<-vlevsi;
-	attr(x,"namesvlevsi")<-names(vlevsi); 
-
-	}
-	}
-
-	# try to add variable labels as R comments: (L.A. -- ?)
-
-	comment(x[[i]]) <- VARLABELS[i]
-      }
-
-# end of added recoding -- L.A.
+                if (DBG) {
+                    attr(x,"vlevsi")<-vlevsi;
+                    attr(x,"namesvlevsi")<-names(vlevsi); 
+                }
 	
-# SAVE AS R WORKSPACE: (L.A.)
-        save(x,file=dsnprfx)
+            }	
+	}
+
+	# try to add variable labels as R comments: 
+	comment(x[[i]]) <- VARLABELS[i]
+    }
+
+    # SAVE AS R WORKSPACE: 
+    save(x,file=dsnprfx)
 } # end of createDataverseDataFrame
 
+direct_export <- function(file, fmt, dsnprfx){
+    if (fmt == "dta"){
+        table <- read_dta(file)
+    } else if (fmt == "sav"){
+        table <- read_sav(file)
+    } else if (fmt == "por"){
+        table <- read_por(file)
+    }
+    save(table, file=dsnprfx)
+}

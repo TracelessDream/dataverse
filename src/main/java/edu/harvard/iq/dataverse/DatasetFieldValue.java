@@ -6,18 +6,22 @@
 
 package edu.harvard.iq.dataverse;
 
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import edu.harvard.iq.dataverse.util.MarkupChecker;
 import java.io.Serializable;
 import java.util.Comparator;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.Table;
-import javax.persistence.Transient;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  *
@@ -85,7 +89,49 @@ public class DatasetFieldValue implements Serializable {
     public void setValueForEdit(String value) {
         this.value = value;
     }
+    
+    public String getDisplayValue() {
+        String retVal = "";
+        if (!StringUtils.isBlank(this.getValue()) && !DatasetField.NA_VALUE.equals(this.getValue())) {
+            String format = this.datasetField.getDatasetFieldType().getDisplayFormat();
+            if (StringUtils.isBlank(format)) {
+                format = "#VALUE";
+            }           
+            String sanitizedValue = !this.datasetField.getDatasetFieldType().isSanitizeHtml() ? this.getValue() :  MarkupChecker.sanitizeBasicHTML(this.getValue());    
+            
+                if (!this.datasetField.getDatasetFieldType().isSanitizeHtml() && this.datasetField.getDatasetFieldType().isEscapeOutputText()){
+                    sanitizedValue = MarkupChecker.stripAllTags(sanitizedValue);
+                }
+            
+            // replace the special values in the format (note: we replace #VALUE last since we don't
+            // want any issues if the value itself has #NAME in it)
+            String displayValue = format
+                    .replace("#NAME",  this.datasetField.getDatasetFieldType().getTitle() == null ? "" : this.datasetField.getDatasetFieldType().getTitle())
+                    .replace("#EMAIL", BundleUtil.getStringFromBundle("dataset.email.hiddenMessage"))
+                    .replace("#VALUE", sanitizedValue);
+            retVal = displayValue;
+        }
 
+        return retVal;
+    }
+
+    public String getUnsanitizedDisplayValue() {
+        String retVal = "";
+        if (!StringUtils.isBlank(this.getValue()) && !DatasetField.NA_VALUE.equals(this.getValue())) {
+            String format = this.datasetField.getDatasetFieldType().getDisplayFormat();
+            if (StringUtils.isBlank(format)) {
+                format = "#VALUE";
+            }           
+            String value = this.getValue();    
+            String displayValue = format
+                    .replace("#NAME",  this.datasetField.getDatasetFieldType().getTitle() == null ? "" : this.datasetField.getDatasetFieldType().getTitle())
+                    .replace("#EMAIL", BundleUtil.getStringFromBundle("dataset.email.hiddenMessage"))
+                    .replace("#VALUE", value);
+            retVal = displayValue;
+        }
+        return retVal;
+    }
+    
     public int getDisplayOrder() {
         return displayOrder;
     }

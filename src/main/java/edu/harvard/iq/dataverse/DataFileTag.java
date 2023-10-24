@@ -11,15 +11,16 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.Table;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  *
@@ -57,7 +58,7 @@ public class DataFileTag implements Serializable {
     
     private static final Map<TagType, String> TagTypeToLabels = new HashMap<>();
     
-    private static final Map<String, TagType> TagLabelToTypes = new HashMap<>();
+    public static final Map<String, TagType> TagLabelToTypes = new HashMap<>();
     
     
     static {
@@ -81,7 +82,7 @@ public class DataFileTag implements Serializable {
     }
     
     public static List<String> listTags() {
-        List<String> retlist = new ArrayList();
+        List<String> retlist = new ArrayList<>();
         
         for(TagType t : TagType.values()) {
             retlist.add(TagTypeToLabels.get(t));
@@ -105,6 +106,7 @@ public class DataFileTag implements Serializable {
         return this.type;
     }
     
+    
     public void setType(TagType type) {
         this.type = type;
     }
@@ -127,6 +129,17 @@ public class DataFileTag implements Serializable {
         return null; 
     }
     
+    /**
+     * Is this a geospatial tag, e.g. TagType.Geospatial
+     * @return 
+     */
+    public boolean isGeospatialTag(){
+        if (this.type == null){
+            return false;
+        }
+        return this.type == TagType.Geospatial;
+    }
+    
     @Override
     public int hashCode() {
         int hash = 0;
@@ -141,10 +154,7 @@ public class DataFileTag implements Serializable {
             return false;
         }
         DataFileTag other = (DataFileTag) object;
-        if ((this.id == null && other.id != null) || (this.id != null && !this.id.equals(other.id))) {
-            return false;
-        }
-        return true;
+        return !((this.id == null && other.id != null) || (this.id != null && !this.id.equals(other.id)));
     }
 
     @Override
@@ -152,4 +162,41 @@ public class DataFileTag implements Serializable {
         return "edu.harvard.iq.dataverse.DataFileTag[ id=" + id + " ]";
     }
     
+    
+    /**
+     * Static method to check whether a string is a valid tag
+     * 
+     * Used for API check
+     * 
+     * @param tagString
+     * @return 
+     */
+    public static boolean isDataFileTag(String label){
+        
+        if (label == null){
+            throw new NullPointerException("label cannot be null");
+        }
+       
+        return TagLabelToTypes.containsKey(label);
+    }
+    
+    public TagType getDataFileTagFromLabel(String label){
+        
+        if (!TagLabelToTypes.containsKey(label)){
+            return null;
+        }
+        
+        return TagLabelToTypes.get(label);
+    }
+    
+    
+    public static List<String> getListofLabels(){
+    
+        return new ArrayList<>(TagTypeToLabels.values());
+    }
+    
+    public static String getListofLabelsAsString(){
+        
+        return StringUtils.join(DataFileTag.getListofLabels(), ", ");
+    }
 }

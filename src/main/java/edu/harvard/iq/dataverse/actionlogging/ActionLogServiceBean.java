@@ -1,11 +1,11 @@
 package edu.harvard.iq.dataverse.actionlogging;
 
 import java.util.Date;
-import javax.ejb.Stateless;
-import javax.ejb.TransactionAttribute;
-import javax.ejb.TransactionAttributeType;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
+import jakarta.ejb.Stateless;
+import jakarta.ejb.TransactionAttribute;
+import jakarta.ejb.TransactionAttributeType;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 /**
  * A service bean that persists {@link ActionLogRecord}s to the DB.
@@ -32,4 +32,18 @@ public class ActionLogServiceBean {
         }
         em.persist(rec);
     }
+
+    //Switches all actions from one identifier to another identifier, via native query
+    //This is needed for when we change a userIdentifier or merge one account into another
+    public void changeUserIdentifierInHistory(String oldIdentifier, String newIdentifier) {
+        em.createNativeQuery(
+                "UPDATE actionlogrecord "
+                        + "SET useridentifier='"+newIdentifier+"', "
+                        + "info='orig from "+oldIdentifier+" | ' || info "
+                        + "WHERE useridentifier='"+oldIdentifier+"'"
+        ).executeUpdate();
+    }
+   
+
+    
 }

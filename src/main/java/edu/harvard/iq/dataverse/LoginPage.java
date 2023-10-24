@@ -7,25 +7,29 @@ import edu.harvard.iq.dataverse.authorization.AuthenticationResponse;
 import edu.harvard.iq.dataverse.authorization.AuthenticationServiceBean;
 import edu.harvard.iq.dataverse.authorization.CredentialsAuthenticationProvider;
 import edu.harvard.iq.dataverse.authorization.exceptions.AuthenticationFailedException;
+import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinAuthenticationProvider;
 import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinUserServiceBean;
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
-import edu.harvard.iq.dataverse.passwordreset.PasswordResetServiceBean;
 import edu.harvard.iq.dataverse.settings.SettingsServiceBean;
+import edu.harvard.iq.dataverse.util.BundleUtil;
 import edu.harvard.iq.dataverse.util.JsfHelper;
-import static edu.harvard.iq.dataverse.util.JsfHelper.JH;
+
+import edu.harvard.iq.dataverse.util.SystemConfig;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.faces.application.FacesMessage;
-import javax.faces.event.AjaxBehaviorEvent;
-import javax.faces.view.ViewScoped;
-import javax.inject.Inject;
-import javax.inject.Named;
+import jakarta.ejb.EJB;
+import jakarta.faces.application.FacesMessage;
+import jakarta.faces.component.UIComponent;
+import jakarta.faces.context.FacesContext;
+import jakarta.faces.event.AjaxBehaviorEvent;
+import jakarta.faces.validator.ValidatorException;
+import jakarta.faces.view.ViewScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  *
@@ -84,25 +88,35 @@ public class LoginPage implements java.io.Serializable {
 
     @EJB
     SettingsServiceBean settingsService;
+
+    @EJB
+    SystemConfig systemConfig;
+    
+    @Inject
+    DataverseRequestServiceBean dvRequestService;
     
     private String credentialsAuthProviderId;
     
     private List<FilledCredential> filledCredentials;
     
     private String redirectPage = "dataverse.xhtml";
-    
+    private AuthenticationProvider authProvider;
+    private int numFailedLoginAttempts;
+    Random random;
+    long op1;
+    long op2;
+    Long userSum;
+
     public void init() {
         Iterator<String> credentialsIterator = authSvc.getAuthenticationProviderIdsOfType( CredentialsAuthenticationProvider.class ).iterator();
         if ( credentialsIterator.hasNext() ) {
             setCredentialsAuthProviderId(credentialsIterator.next());
         }
         resetFilledCredentials(null);
+        authProvider = authSvc.getAuthenticationProvider(systemConfig.getDefaultAuthProvider());
+        random = new Random();
     }
-    
-    public boolean isAuthenticationProvidersAvailable() {
-        return ! authSvc.getAuthenticationProviderIds().isEmpty();
-    }
-    
+
     public List<AuthenticationProviderDisplayInfo> listCredentialsAuthenticationProviders() {
         List<AuthenticationProviderDisplayInfo> infos = new LinkedList<>();
         for ( String id : authSvc.getAuthenticationProviderIdsOfType( CredentialsAuthenticationProvider.class ) ) {
@@ -112,11 +126,21 @@ public class LoginPage implements java.io.Serializable {
         return infos;
     }
     
+    /**
+     * Retrieve information about all enabled identity providers in a sorted order to be displayed to the user.
+     * @return list of display information for each provider
+     */
     public List<AuthenticationProviderDisplayInfo> listAuthenticationProviders() {
         List<AuthenticationProviderDisplayInfo> infos = new LinkedList<>();
-        for ( String id : authSvc.getAuthenticationProviderIds() ) {
-            AuthenticationProvider authenticationProvider = authSvc.getAuthenticationProvider(id);
-            infos.add( authenticationProvider.getInfo());
+        List<AuthenticationProvider> idps = new ArrayList<>(authSvc.getAuthenticationProviders());
+        
+        // sort by order first. in case of same order values, be deterministic in UI and sort by id, too.
+        Collections.sort(idps, Comparator.comparing(AuthenticationProvider::getOrder).thenComparing(AuthenticationProvider::getId));
+        
+        for (AuthenticationProvider idp : idps) {
+            if (idp != null) {
+                infos.add(idp.getInfo());
+            }
         }
         return infos;
     }
@@ -137,45 +161,50 @@ public class LoginPage implements java.io.Serializable {
             logger.info("Credential list is null!");
             return null;
         }
-        for ( FilledCredential fc : filledCredentialsList ) {
-            if(fc.getValue()==null || fc.getValue().isEmpty()){
-                JH.addMessage(FacesMessage.SEVERITY_ERROR, "Please enter a "+fc.getCredential().getTitle());
-            }
-            authReq.putCredential(fc.getCredential().getTitle(), fc.getValue());
+        for ( FilledCredential fc : filledCredentialsList ) {       
+            authReq.putCredential(fc.getCredential().getKey(), fc.getValue());
         }
-        authReq.setIpAddress( session.getUser().getRequestMetadata().getIpAddress() );
+
+        authReq.setIpAddress( dvRequestService.getDataverseRequest().getSourceAddress() );
         try {
-            AuthenticatedUser r = authSvc.authenticate(credentialsAuthProviderId, authReq);
+            AuthenticatedUser r = authSvc.getUpdateAuthenticatedUser(credentialsAuthProviderId, authReq);
             logger.log(Level.FINE, "User authenticated: {0}", r.getEmail());
             session.setUser(r);
-            
             if ("dataverse.xhtml".equals(redirectPage)) {
-                redirectPage = redirectPage + "&alias=" + dataverseService.findRootDataverse().getAlias();
+                redirectPage = redirectToRoot();
             }
             
             try {            
                 redirectPage = URLDecoder.decode(redirectPage, "UTF-8");
             } catch (UnsupportedEncodingException ex) {
                 Logger.getLogger(LoginPage.class.getName()).log(Level.SEVERE, null, ex);
-                redirectPage = "dataverse.xhtml&alias=" + dataverseService.findRootDataverse().getAlias();
+                redirectPage = redirectToRoot();
             }
 
             logger.log(Level.FINE, "Sending user to = {0}", redirectPage);
-
             return redirectPage + (!redirectPage.contains("?") ? "?" : "&") + "faces-redirect=true";
 
             
         } catch (AuthenticationFailedException ex) {
+            numFailedLoginAttempts++;
+            op1 = new Long(random.nextInt(10));
+            op2 = new Long(random.nextInt(10));
             AuthenticationResponse response = ex.getResponse();
             switch ( response.getStatus() ) {
                 case FAIL:
-                    JsfHelper.addErrorMessage(JH.localize("login.invaliduserpassword"));
+                    JsfHelper.addErrorMessage(BundleUtil.getStringFromBundle("login.builtin.invalidUsernameEmailOrPassword"));
                     return null;
                 case ERROR:
-                    JsfHelper.addErrorMessage(JH.localize("login.error"));
+                    /**
+                     * @todo How do we exercise this part of the code? Something
+                     * with password upgrade? See
+                     * https://github.com/IQSS/dataverse/pull/2922
+                     */
+                    JsfHelper.addErrorMessage(BundleUtil.getStringFromBundle("login.error"));
                     logger.log( Level.WARNING, "Error logging in: " + response.getMessage(), response.getError() );
                     return null;
                 case BREAKOUT:
+                    FacesContext.getCurrentInstance().getExternalContext().getFlash().put("silentUpgradePasswd",authReq.getCredential(BuiltinAuthenticationProvider.KEY_PASSWORD));
                     return response.getMessage();
                 default:
                     JsfHelper.addErrorMessage("INTERNAL ERROR");
@@ -183,6 +212,10 @@ public class LoginPage implements java.io.Serializable {
             }
         }
         
+    }
+    
+    private String redirectToRoot(){
+        return "dataverse.xhtml?alias=" + dataverseService.findRootDataverse().getAlias();
     }
 
     public String getCredentialsAuthProviderId() {
@@ -221,5 +254,64 @@ public class LoginPage implements java.io.Serializable {
     public void setRedirectPage(String redirectPage) {
         this.redirectPage = redirectPage;
     }
-    
+
+    public AuthenticationProvider getAuthProvider() {
+        return authProvider;
+    }
+
+    public void setAuthProviderById(String authProviderId) {
+        logger.fine("Setting auth provider to " + authProviderId);
+        this.authProvider = authSvc.getAuthenticationProvider(authProviderId);
+    }
+
+    public String getLoginButtonText() {
+        if (authProvider != null) {
+            // Note that for ORCID we do not want the normal "Log In with..." text. There is special logic in the xhtml.
+            return BundleUtil.getStringFromBundle("login.button", Arrays.asList(authProvider.getInfo().getTitle()));
+        } else {
+            return BundleUtil.getStringFromBundle("login.button", Arrays.asList("???"));
+        }
+    }
+
+    public int getNumFailedLoginAttempts() {
+        return numFailedLoginAttempts;
+    }
+
+    public boolean isRequireExtraValidation() {
+        if (numFailedLoginAttempts > 2) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    public long getOp1() {
+        return op1;
+    }
+
+    public long getOp2() {
+        return op2;
+    }
+
+    public Long getUserSum() {
+        return userSum;
+    }
+
+    public void setUserSum(Long userSum) {
+        this.userSum = userSum;
+    }
+
+    // TODO: Consolidate with SendFeedbackDialog.validateUserSum?
+    public void validateUserSum(FacesContext context, UIComponent component, Object value) throws ValidatorException {
+        // The FacesMessage text is on the xhtml side.
+        FacesMessage msg = new FacesMessage("");
+        ValidatorException validatorException = new ValidatorException(msg);
+        if (value == null) {
+            throw validatorException;
+        }
+        if (op1 + op2 != (Long) value) {
+            throw validatorException;
+        }
+    }
+
 }

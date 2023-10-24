@@ -4,13 +4,16 @@
 
 package edu.harvard.iq.dataverse.util;
 
+import java.util.Arrays;
 import java.util.EnumSet;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import static org.junit.Assert.*;
+import java.util.List;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  *
@@ -25,21 +28,21 @@ public class BitSetTest {
 	public BitSetTest() {
 	}
 	
-	@BeforeClass
+	@BeforeAll
 	public static void setUpClass() {
 	}
 	
-	@AfterClass
+	@AfterAll
 	public static void tearDownClass() {
 	}
 	
 	BitSet sut;
-	@Before
+	@BeforeEach
 	public void setUp() {
 		sut = new BitSet();
 	}
 	
-	@After
+	@AfterEach
 	public void tearDown() {
 	}
 
@@ -53,7 +56,19 @@ public class BitSetTest {
 			assertTrue( sut.isSet(i) );
 		}
 	}
-
+    
+    @Test
+    public void testSetByParameter() {
+        BitSet tSut = BitSet.emptySet();
+        List<Integer> indices = Arrays.asList(0,1,4,6,7,8,20,31);
+        indices.forEach( i -> assertFalse(tSut.isSet(i)) );
+        indices.forEach( i -> tSut.set(i,true) );
+        indices.forEach( i -> assertTrue(tSut.isSet(i)) );
+        indices.forEach( i -> tSut.set(i,false) );
+        indices.forEach( i -> assertFalse(tSut.isSet(i)) );
+        assertTrue( tSut.isEmpty() );
+    }
+    
 	/**
 	 * Test of unset method, of class BitSet.
 	 */
@@ -102,9 +117,9 @@ public class BitSetTest {
 		sut = sut1.copy().intersect(sut2);
 		for ( short i : BitSet.allIndices() ) {
 			if ( sut.isSet(i) ) {
-				assertTrue( "expected true at idx " + i, sut1.isSet(i) && sut2.isSet(i) );
+				assertTrue(sut1.isSet(i) && sut2.isSet(i), "expected true at idx " + i);
 			} else {
-				assertFalse( "expected false at idx " + i, sut1.isSet(i) && sut2.isSet(i) );
+				assertFalse(sut1.isSet(i) && sut2.isSet(i), "expected false at idx " + i);
 			}
 		}
 	}
@@ -119,9 +134,9 @@ public class BitSetTest {
 		sut = sut1.copy().xor(sut2);
 		for ( short i : BitSet.allIndices() ) {
 			if ( sut.isSet(i) ) {
-				assertTrue( "expected true at idx " + i, sut1.isSet(i) ^ sut2.isSet(i) );
+				assertTrue(sut1.isSet(i) ^ sut2.isSet(i), "expected true at idx " + i);
 			} else {
-				assertFalse( "expected false at idx " + i, sut1.isSet(i) ^ sut2.isSet(i) );
+				assertFalse(sut1.isSet(i) ^ sut2.isSet(i), "expected false at idx " + i);
 			}
 		}
 	}

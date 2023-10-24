@@ -3,12 +3,14 @@ package edu.harvard.iq.dataverse.authorization.groups.impl;
 import edu.harvard.iq.dataverse.authorization.groups.Group;
 import edu.harvard.iq.dataverse.authorization.RoleAssigneeDisplayInfo;
 import java.io.Serializable;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.Id;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  * Convenience base class for implementing groups that apply to the entire Dataverse
@@ -21,6 +23,7 @@ import javax.persistence.NamedQuery;
                 query="SELECT g FROM PersistedGlobalGroup g WHERE g.persistedGroupAlias=:persistedGroupAlias" )
 })
 @Entity
+@Table(indexes = {@Index(columnList="dtype")})
 public abstract class PersistedGlobalGroup implements Group, Serializable {
     
     @Id
@@ -28,7 +31,7 @@ public abstract class PersistedGlobalGroup implements Group, Serializable {
     private Long id;
     
     /**
-     * A unique alias within the persisted group table. 
+     * A unique alias within the Dataverse system installation.
      */
     @Column(unique = true)
     private String persistedGroupAlias;
@@ -89,4 +92,6 @@ public abstract class PersistedGlobalGroup implements Group, Serializable {
     public String toString() {
         return "[PersistedGlobalGroup " + getIdentifier() + "]";
     }
+    
+
 }

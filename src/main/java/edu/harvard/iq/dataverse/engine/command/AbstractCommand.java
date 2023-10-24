@@ -16,9 +16,9 @@ import java.util.Set;
  */
 public abstract class AbstractCommand<R> implements Command<R> {
 
-    private final Map<String, DvObject> affectedDataverses;
-    private final User user;
-
+    private final Map<String, DvObject> affectedDvObjects;
+    private final DataverseRequest request;
+    
     static protected class DvNamePair {
 
         final String name;
@@ -41,37 +41,62 @@ public abstract class AbstractCommand<R> implements Command<R> {
         return new DvNamePair(s, d);
     }
 
-    public AbstractCommand(User aUser, DvObject anAffectedDvObject) {
-        this(aUser, dv("", anAffectedDvObject));
+    public AbstractCommand(DataverseRequest aRequest, DvObject anAffectedDvObject) {
+        this(aRequest, dv("", anAffectedDvObject));
     }
-
-    public AbstractCommand(User aUser, DvNamePair dvp, DvNamePair... more) {
-        user = aUser;
-        affectedDataverses = new HashMap<>();
-        affectedDataverses.put(dvp.name, dvp.dvObject);
+    
+    public AbstractCommand(DataverseRequest aRequest, DvNamePair dvp, DvNamePair... more) {
+        request = aRequest;
+        affectedDvObjects = new HashMap<>();
+        affectedDvObjects.put(dvp.name, dvp.dvObject);
         for (DvNamePair p : more) {
-            affectedDataverses.put(p.name, p.dvObject);
+            affectedDvObjects.put(p.name, p.dvObject);
         }
     }
-
-    public AbstractCommand(User aUser, Map<String, DvObject> someAffectedDvObjects) {
-        user = aUser;
-        affectedDataverses = someAffectedDvObjects;
+    
+    public AbstractCommand(DataverseRequest aRequest, Map<String, DvObject> someAffectedDvObjects) {
+        request = aRequest;
+        affectedDvObjects = someAffectedDvObjects;
     }
-
+    
     @Override
     public Map<String, DvObject> getAffectedDvObjects() {
-        return affectedDataverses;
+        return affectedDvObjects;
     }
 
     @Override
-    public User getUser() {
-        return user;
+    public DataverseRequest getRequest() {
+        return request;
     }
 
     @Override
     public Map<String, Set<Permission>> getRequiredPermissions() {
         return CH.permissionsRequired(getClass());
+    }
+
+    /**
+     * Convenience method for getting the user requesting this command.
+     * @return the user issuing the command (via the {@link DataverseRequest}).
+     */
+    protected User getUser() {
+       return getRequest().getUser();
+    }
+
+    @Override
+    public String describe() {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, DvObject> ent : affectedDvObjects.entrySet()) {
+            DvObject value = ent.getValue();
+            sb.append(ent.getKey()).append(":");
+            sb.append((value != null) ? value.accept(DvObject.NameIdPrinter) : "<null>");
+            sb.append(" ");
+        }
+        return sb.toString();
+    }
+    
+    @Override 
+    public boolean onSuccess(CommandContext ctxt, Object r) {
+        return true;
     }
 
 }

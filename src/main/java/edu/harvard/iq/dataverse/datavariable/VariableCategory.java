@@ -8,17 +8,16 @@ package edu.harvard.iq.dataverse.datavariable;
 
 import java.io.Serializable;
 import java.util.List;
-import java.util.ArrayList; 
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 
 import edu.harvard.iq.dataverse.util.AlphaNumericComparator;
-import javax.persistence.Index;
-import javax.persistence.Table;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -154,21 +153,6 @@ public class VariableCategory  implements Comparable, Serializable {
     // [TODO: double-check if we still need this method in 4.0; -- L.A., jan. 2014] 
     private transient List charList;
 
-    public List getValueCharacterList() {
-        if (charList == null) {
-            charList = new ArrayList();
-            for (int i=0; i < this.value.length(); i++) {
-                if (this.value.charAt(i) == ' ') {
-                    charList.add( "&nbsp;" );
-                } else {
-                    charList.add( this.value.charAt(i) );
-                }
-            }
-        }
-        return charList;
-    }
-    
-    
     /* 
      * Custom overrides for hashCode(), equals() and toString() methods:
      */

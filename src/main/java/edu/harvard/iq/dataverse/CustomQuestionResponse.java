@@ -7,8 +7,8 @@ package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
 import java.util.List;
-import javax.faces.model.SelectItem;
-import javax.persistence.*;
+import jakarta.faces.model.SelectItem;
+import jakarta.persistence.*;
 
 /**
  *
@@ -32,6 +32,7 @@ public class CustomQuestionResponse implements Serializable {
     @JoinColumn(nullable = false)
     private CustomQuestion customQuestion;
     
+    @Column(name = "response", columnDefinition = "TEXT", nullable = true)
     private String response;
 
     public Long getId() {
@@ -102,5 +103,6 @@ public class CustomQuestionResponse implements Serializable {
     public String toString() {
         return "edu.harvard.iq.dvn.core.vdc.CustomQuestionResponse[ id=" + id + " ]";
     }
+
 }
 

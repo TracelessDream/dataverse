@@ -19,107 +19,87 @@
 */
 package edu.harvard.iq.dataverse.dataaccess;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 
 import edu.harvard.iq.dataverse.DataFile;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.channels.Channel;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
+import java.util.logging.Logger;
+
+import org.apache.commons.io.IOUtils;
+
 /**
  *
  * @author Leonid Andreev
  */
 public class StoredOriginalFile {
+    private static Logger logger = Logger.getLogger(StoredOriginalFile.class.getPackage().getName());
     
     public StoredOriginalFile () {
         
     }
     
-    public static FileAccessObject retrieve (DataFile dataFile, FileAccessObject fileDownload) {
-        String originalMimeType = null; 
-        
+    public static final String SAVED_ORIGINAL_FILENAME_EXTENSION = "orig";
+    
+    public static StorageIO<DataFile> retreive(StorageIO<DataFile> storageIO) {
+        String originalMimeType;
+
+        DataFile dataFile = storageIO.getDataFile();
+
+        if (dataFile == null) {
+            return null;
+        }
+
         if (dataFile.getDataTable() != null) {
             originalMimeType = dataFile.getDataTable().getOriginalFileFormat();
         } else {
-            return null; 
+            return null;
         }
-        
-        String tabularFileName = dataFile.getFileSystemName(); 
-        Path savedOriginalPath = null; 
-        
-        if (tabularFileName != null && !tabularFileName.equals("")) {
-            savedOriginalPath = Paths.get(dataFile.getOwner().getFileSystemDirectory().toString(), "_"+tabularFileName);
-        }     
-        
 
-        if (savedOriginalPath != null) {
-            
-            if (Files.exists(savedOriginalPath)) {
-                
-                fileDownload.closeInputStream();
-                fileDownload.setSize(savedOriginalPath.toFile().length());
-                
-                try {
-                    fileDownload.setInputStream(new FileInputStream(savedOriginalPath.toFile()));
-                } catch (IOException ex) {
-                    return null; 
-                }
-                fileDownload.setIsLocalFile(true);
+        long storedOriginalSize; 
+        InputStreamIO inputStreamIO;
+        Channel storedOriginalChannel = null;
+        try {
+            storageIO.open();
+            storedOriginalChannel = storageIO.openAuxChannel(SAVED_ORIGINAL_FILENAME_EXTENSION);
+            storedOriginalSize = dataFile.getDataTable().getOriginalFileSize() != null ? 
+                    dataFile.getDataTable().getOriginalFileSize() : 
+                    storageIO.getAuxObjectSize(SAVED_ORIGINAL_FILENAME_EXTENSION);
+            inputStreamIO = new InputStreamIO(Channels.newInputStream((ReadableByteChannel) storedOriginalChannel), storedOriginalSize);
+            logger.fine("Opened stored original file as Aux "+SAVED_ORIGINAL_FILENAME_EXTENSION);
+        } catch (IOException ioEx) {
+        	IOUtils.closeQuietly(storedOriginalChannel);
+        	// The original file not saved, or could not be opened.
+            logger.fine("Failed to open stored original file as Aux "+SAVED_ORIGINAL_FILENAME_EXTENSION+"!");
+            return null;
+        }
 
-                if (originalMimeType != null && !originalMimeType.equals("")) {
-                    if (originalMimeType.matches("application/x-dvn-.*-zip")) {
-                        fileDownload.setMimeType("application/zip");
-                    } else {
-                        fileDownload.setMimeType(originalMimeType);
-                    }
-                } else {
-                    fileDownload.setMimeType("application/x-unknown");
-                }
-
-                String fileName = fileDownload.getFileName();
-                if (fileName != null) {
-                    if ( originalMimeType != null) {
-                        String origFileExtension = generateOriginalExtension(originalMimeType);
-                        fileDownload.setFileName(fileName.replaceAll(".tab$", origFileExtension));
-                    } else {
-                        fileDownload.setFileName(fileName.replaceAll(".tab$", ""));
-                    }
-                }
-
-
-                // The fact that we have the "original format" file for this data
-                // set, means it's a subsettable, tab-delimited file. Which means
-                // we've already prepared a variable header to be added to the
-                // stream. We don't want to add it to the stream that's no longer
-                // tab-delimited -- that would screw it up! -- so let's remove
-                // those headers:
-
-                fileDownload.setNoVarHeader(true);
-                fileDownload.setVarHeader(null);
-
-                return fileDownload;
+        if (originalMimeType != null && !originalMimeType.isEmpty()) {
+            if (originalMimeType.matches("application/x-dvn-.*-zip")) {
+                inputStreamIO.setMimeType("application/zip");
+            } else {
+                inputStreamIO.setMimeType(originalMimeType);
             }
+        } else {
+            inputStreamIO.setMimeType("application/x-unknown");
         }
-        
-        return null;
+
+        inputStreamIO.setFileName(dataFile.getOriginalFileName());
+
+        return inputStreamIO;
+
     }
 
-    // TODO: 
-    // do what the comment below says - move this code into the file util, 
-    // or something like that!
-    // -- L.A. 4.0 beta15
-    // Shouldn't be here; should be part of the DataFileFormatType, or 
-    // something like that... 
-    
+    /* 
+            DataFile.getOriginalFileName() method replaces this code
     private static String generateOriginalExtension(String fileType) {
 
         if (fileType.equalsIgnoreCase("application/x-spss-sav")) {
             return ".sav";
         } else if (fileType.equalsIgnoreCase("application/x-spss-por")) {
             return ".por";
-        } else if (fileType.equalsIgnoreCase("application/x-stata")) {
+        } else if (fileType.equalsIgnoreCase("application/x-stata") || fileType.equalsIgnoreCase("application/x-stata-13") || fileType.equalsIgnoreCase("application/x-stata-14") || fileType.equalsIgnoreCase("application/x-stata-15")) {
             return ".dta";
         } else if (fileType.equalsIgnoreCase("application/x-dvn-csvspss-zip")) {
             return ".zip";
@@ -127,8 +107,14 @@ public class StoredOriginalFile {
             return ".zip";
         } else if (fileType.equalsIgnoreCase("application/x-rlang-transport")) {
             return ".RData";
+        } else if (fileType.equalsIgnoreCase("text/csv") || fileType.equalsIgnoreCase("text/comma-separated-values")) {
+            return ".csv";
+        } else if (fileType.equalsIgnoreCase("text/tsv") || fileType.equalsIgnoreCase("text/tab-separated-values")) {
+            return ".tsv";
+        } else if (fileType.equalsIgnoreCase("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) {
+            return ".xlsx";
         }
-
+        logger.severe(fileType + " does not have an associated file extension");
         return "";
-    }
+    } */
 }

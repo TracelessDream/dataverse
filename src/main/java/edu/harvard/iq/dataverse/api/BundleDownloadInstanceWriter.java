@@ -12,14 +12,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
 
-import javax.ws.rs.WebApplicationException;
+import jakarta.ws.rs.InternalServerErrorException;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.WebApplicationException;
 
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
-
-import javax.ws.rs.ext.MessageBodyWriter;
-import javax.ws.rs.ext.Provider;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.ext.MessageBodyWriter;
+import jakarta.ws.rs.ext.Provider;
 
 import edu.harvard.iq.dataverse.DataFile;
 import edu.harvard.iq.dataverse.dataaccess.*;
@@ -56,7 +56,7 @@ public class BundleDownloadInstanceWriter implements MessageBodyWriter<BundleDow
             if (di.getDownloadInfo() != null && di.getDownloadInfo().getDataFile() != null) {
                 DataAccessRequest daReq = new DataAccessRequest();
                 DataFile sf = di.getDownloadInfo().getDataFile();
-                DataAccessObject accessObject = DataAccess.createDataAccessObject(sf, daReq);
+                StorageIO<DataFile> accessObject = DataAccess.getStorageIO(sf, daReq);
 
                 if (accessObject != null) {
                     accessObject.open();
@@ -94,7 +94,7 @@ public class BundleDownloadInstanceWriter implements MessageBodyWriter<BundleDow
                     // Now, the original format: 
                     String origFormat = null; 
                     try {
-                        DataAccessObject accessObjectOrig = StoredOriginalFile.retrieve(sf, (FileAccessObject) accessObject);
+                        StorageIO<DataFile> accessObjectOrig = StoredOriginalFile.retreive(accessObject); //.retrieve(sf, (FileAccessIO) accessObject);
                         if (accessObjectOrig != null) {
                             instream = accessObjectOrig.getInputStream();
                             if (instream != null) {
@@ -127,11 +127,8 @@ public class BundleDownloadInstanceWriter implements MessageBodyWriter<BundleDow
                     // add an RData version: 
                     if (!"application/x-rlang-transport".equals(origFormat)) {
                         try {
-                            DataAccessObject accessObjectRdata
-                                    = DataFileConverter.performFormatConversion(
-                                            sf,
-                                            (FileAccessObject) accessObject,
-                                            "RData", "application/x-rlang-transport");
+                            StorageIO<DataFile> accessObjectRdata = DataConverter.performFormatConversion(sf, accessObject,
+                                                                                                           "RData", "application/x-rlang-transport");
 
                             if (accessObjectRdata != null) {
                                 instream = accessObjectRdata.getInputStream();
@@ -186,15 +183,23 @@ public class BundleDownloadInstanceWriter implements MessageBodyWriter<BundleDow
                         zout.closeEntry();
                     }
 
+                    if (di.getFileCitationBibtex() != null) {
+                        e = new ZipEntry(fileName.replaceAll("\\.tab$","citation-bib.bib"));
+
+                        zout.putNextEntry(e);
+                        zout.write(di.getFileCitationBibtex().getBytes());
+                        zout.closeEntry();
+                    }
+
                     zout.close();
                     return;
                 }
             }
         } catch (IOException ioex) {
-            throw new WebApplicationException(Response.Status.INTERNAL_SERVER_ERROR);
+            throw new InternalServerErrorException();
         }
 
-        throw new WebApplicationException(Response.Status.NOT_FOUND);
+        throw new NotFoundException();
 
     }
 

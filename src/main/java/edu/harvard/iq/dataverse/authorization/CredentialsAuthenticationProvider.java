@@ -12,23 +12,23 @@ import java.util.List;
 public interface CredentialsAuthenticationProvider extends AuthenticationProvider {
     
     static class Credential { 
-        private final String title;
+        private final String key;
         
         /**
          * When {@code true}, the login form will use the secret/password widget rather than the regular text field.
          */
         private final boolean secret;
 
-        public Credential(String title, boolean secret) {
-            this.title = title;
+        public Credential(String key, boolean secret) {
+            this.key = key;
             this.secret = secret;
         }
-        public Credential(String title) {
-            this( title, false); 
+        public Credential(String key) {
+            this( key, false); 
         }
        
-        public String getTitle() {
-            return title;
+        public String getKey() {
+            return key;
         }
 
         public boolean isSecret() {
@@ -45,4 +45,12 @@ public interface CredentialsAuthenticationProvider extends AuthenticationProvide
      */
     List<Credential> getRequiredCredentials();
     
+    /**
+     * The main method of this interface - provide a consistent user id, within
+     * the scope of this provider, for a user based on the request content.
+     * @param request All information needed to decide whether the user can be authenticated.
+     * @return response with the result of the authentication process.
+     * TODO BACKLOG push this method down to CredentialsAuthenticationProvider.
+     */
+    AuthenticationResponse authenticate( AuthenticationRequest request );
 }

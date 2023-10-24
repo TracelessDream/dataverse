@@ -7,26 +7,23 @@
 package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.List;
-import javax.persistence.CascadeType;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.OneToMany;
-import javax.validation.constraints.Size;
-import javax.persistence.OrderBy;
-import org.hibernate.validator.constraints.NotBlank;
-import org.hibernate.validator.constraints.URL;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
+import jakarta.validation.constraints.Size;
+import jakarta.persistence.OrderBy;
 
 import edu.harvard.iq.dataverse.datavariable.DataVariable;
 import java.util.Objects;
-import javax.persistence.Column;
-import javax.persistence.Index;
-import javax.persistence.Table;
+import jakarta.persistence.Column;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -103,6 +100,18 @@ public class DataTable implements Serializable {
      */
     private String originalFormatVersion;
     
+    /* 
+     * Size of the original file:
+    */
+    
+    private Long originalFileSize; 
+    
+    /**
+     * originalFileName: the file name upon upload/ingest
+     */
+    @Column( nullable = true )
+    private String originalFileName;
+    
     /*
      * Getter and Setter methods:
      */
@@ -172,6 +181,14 @@ public class DataTable implements Serializable {
         this.originalFileFormat = originalFileType;
     }
 
+    public Long getOriginalFileSize() {
+        return originalFileSize; 
+    }
+    
+    public void setOriginalFileSize(Long originalFileSize) {
+        this.originalFileSize = originalFileSize;
+    }
+    
     
     public String getOriginalFormatVersion() {
         return originalFormatVersion;
@@ -179,6 +196,14 @@ public class DataTable implements Serializable {
 
     public void setOriginalFormatVersion(String originalFormatVersion) {
         this.originalFormatVersion = originalFormatVersion;
+    }
+       
+    public String getOriginalFileName() {
+        return originalFileName;
+    }
+
+    public void setOriginalFileName(String originalFileName) {
+        this.originalFileName = originalFileName;
     }
     
     /* 

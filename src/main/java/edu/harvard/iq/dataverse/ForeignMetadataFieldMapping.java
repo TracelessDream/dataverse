@@ -3,20 +3,17 @@
 package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
-import javax.persistence.*;
+import jakarta.persistence.*;
 import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
 
 /**
  *
  * @author Leonid Andreev
  */
-@Table(
-        uniqueConstraints = @UniqueConstraint(columnNames={"foreignMetadataFormatMapping_id","foreignFieldXpath"}) )
+@Table( uniqueConstraints = @UniqueConstraint(columnNames={"foreignMetadataFormatMapping_id","foreignFieldXpath"}) 
+      , indexes = {@Index(columnList="foreignmetadataformatmapping_id")
+		, @Index(columnList="foreignfieldxpath")
+		, @Index(columnList="parentfieldmapping_id")})
 @NamedQueries({
   @NamedQuery( name="ForeignMetadataFieldMapping.findByPath",
                query="SELECT fmfm FROM ForeignMetadataFieldMapping fmfm WHERE fmfm.foreignMetadataFormatMapping.name=:formatName AND fmfm.foreignFieldXPath=:xPath")  

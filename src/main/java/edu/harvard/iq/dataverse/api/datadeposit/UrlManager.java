@@ -6,7 +6,7 @@ import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Logger;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.swordapp.server.SwordError;
 import org.swordapp.server.UriRegistry;
 
@@ -29,35 +29,6 @@ public class UrlManager {
             javaNetUri = new URI(url);
         } catch (URISyntaxException ex) {
             throw new SwordError(UriRegistry.ERROR_BAD_REQUEST, "Invalid URL syntax: " + url);
-        }
-        /**
-         * @todo: figure out another way to check for http. We used to use
-         * javaNetUri.getScheme() but now that we are using "ProxyPass /
-         * ajp://localhost:8009/" in Apache it's always http rather than https.
-         *
-         * http://serverfault.com/questions/6128/how-do-i-force-apache-to-use-https-in-conjunction-with-ajp
-         * http://stackoverflow.com/questions/1685563/apache-webserver-jboss-ajp-connectivity-with-https
-         * http://stackoverflow.com/questions/12460422/how-do-ensure-that-apache-ajp-to-tomcat-connection-is-secure-encrypted
-         */
-        if (!"https".equals(javaNetUri.getScheme())) {
-            /**
-             * @todo figure out how to prevent this stackstrace from showing up
-             * in Glassfish logs:
-             *
-             * Unable to populate SSL attributes
-             * java.lang.IllegalStateException: SSLEngine is null at
-             * org.glassfish.grizzly.ssl.SSLSupportImpl
-             *
-             * https://github.com/IQSS/dataverse/issues/643
-             *
-             * SSLOptions +StdEnvVars +ExportCertData ?
-             *
-             * [#GLASSFISH-20694] Glassfish 4.0 and jk Unable to populate SSL
-             * attributes - Java.net JIRA -
-             * https://java.net/jira/browse/GLASSFISH-20694
-             */
-            logger.fine("https is required but protocol was " + javaNetUri.getScheme());
-//            throw new SwordError(UriRegistry.ERROR_BAD_REQUEST, "https is required but protocol was " + javaNetUri.getScheme());
         }
         this.port = javaNetUri.getPort();
         String[] urlPartsArray = javaNetUri.getPath().split("/");
@@ -130,6 +101,7 @@ public class UrlManager {
                     try {
                         // a user might reasonably pass in a filename as well [.get(2)] since
                         // we expose it in the statement of a study but we ignore it here
+                        // Some day it might be nice to support persistent IDs for files.
                         fileIdString = targetTypeAndIdentifier.get(1);
                     } catch (IndexOutOfBoundsException ex) {
                         throw new SwordError(UriRegistry.ERROR_BAD_REQUEST, "No file id provided in URL: " + url);
@@ -151,30 +123,6 @@ public class UrlManager {
     }
 
     String getHostnamePlusBaseUrlPath(String url) throws SwordError {
-        String optionalPort = "";
-        URI u;
-        try {
-            u = new URI(url);
-        } catch (URISyntaxException ex) {
-            throw new SwordError(UriRegistry.ERROR_BAD_REQUEST, "unable to part URL");
-        }
-        int port = u.getPort();
-        if (port != -1) {
-            // https often runs on port 8181 in dev
-            optionalPort = ":" + port;
-        }
-        String requestedHostname = u.getHost();
-        String hostName = System.getProperty(SystemConfig.FQDN);
-        if (hostName == null) {
-            hostName = "localhost";
-        }
-        /**
-         * @todo should this be configurable? In dev it's convenient to override
-         * the JVM option and force traffic to localhost.
-         */
-        if (requestedHostname.equals("localhost")) {
-            hostName = "localhost";
-        }
         /**
          * @todo Any problem with returning the current API version rather than
          * the version that was operated on? Both should work. If SWORD API
@@ -182,7 +130,7 @@ public class UrlManager {
          * the current version will avoid deprecation warnings on the Dataverse
          * side.
          */
-        return "https://" + hostName + optionalPort + swordConfiguration.getBaseUrlPathCurrent();
+        return SystemConfig.getDataverseSiteUrlStatic() + swordConfiguration.getBaseUrlPathCurrent();
     }
 
     public String getOriginalUrl() {

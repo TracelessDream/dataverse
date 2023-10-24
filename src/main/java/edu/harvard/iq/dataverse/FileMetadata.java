@@ -1,27 +1,60 @@
 package edu.harvard.iq.dataverse;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.annotations.Expose;
+import com.google.gson.annotations.SerializedName;
+import edu.harvard.iq.dataverse.datasetutility.OptionalFileParams;
 import java.io.Serializable;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.ManyToMany;
-import javax.persistence.ManyToOne;
-import javax.persistence.Table;
-import javax.persistence.Version;
+import jakarta.json.Json;
+import jakarta.json.JsonArrayBuilder;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.ManyToMany;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import jakarta.persistence.Version;
+
+import edu.harvard.iq.dataverse.datavariable.CategoryMetadata;
+import edu.harvard.iq.dataverse.datavariable.DataVariable;
+import edu.harvard.iq.dataverse.datavariable.VarGroup;
+import edu.harvard.iq.dataverse.datavariable.VariableMetadata;
+import edu.harvard.iq.dataverse.util.DateUtil;
+import edu.harvard.iq.dataverse.util.StringUtil;
+import java.util.HashSet;
+import java.util.Set;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
 import org.hibernate.validator.constraints.NotBlank;
-import javax.validation.constraints.Pattern;
+import jakarta.validation.constraints.Pattern;
 
 
 /**
@@ -32,26 +65,75 @@ import javax.validation.constraints.Pattern;
 @Entity
 public class FileMetadata implements Serializable {
     private static final long serialVersionUID = 1L;
-    
     private static final Logger logger = Logger.getLogger(FileMetadata.class.getCanonicalName());
 
-    @Pattern(regexp="^[^:<>;#/\"\\*\\|\\?\\\\]*$", message = "File Name cannot contain any of the following characters: \\ / : * ? \" < > | ; # .")    
-    @NotBlank(message = "Please specify a file name.")
+
+    @Expose
+    @Pattern(regexp="^[^:<>;#/\"\\*\\|\\?\\\\]*$", 
+            message = "{filename.illegalCharacters}")
+    @NotBlank(message = "{filename.blank}")
     @Column( nullable=false )
     private String label = "";
+    
+    
+    @ValidateDataFileDirectoryName(message = "{directoryname.illegalCharacters}")
+    @Expose
+    @Column ( nullable=true )
+
+    private String directoryLabel;
+    @Expose
     @Column(columnDefinition = "TEXT")
     private String description = "";
-    //@Column(columnDefinition="TEXT")
-    //private String category = ""; // TODO: remove! -- L.A. 4.0 beta 10
+    
+    /**
+     * At the FileMetadata level, "restricted" is a historical indication of the
+     * data owner's intent for the file by version. Permissions are actually
+     * enforced based on the "restricted" boolean at the *DataFile* level. On
+     * publish, the latest intent is copied from the FileMetadata level to the
+     * DataFile level.
+     */
+    @Expose
     private boolean restricted;
 
     @ManyToOne
     @JoinColumn(nullable=false)
     private DatasetVersion datasetVersion;
+    
     @ManyToOne
     @JoinColumn(nullable=false)
     private DataFile dataFile;
 
+    /**
+     * There are two types of provenance types and this "free-form" type is
+     * represented in the GUI as text box the user can type into. The other type
+     * is based on PROV-JSON from the W3C.
+     */
+    @Expose
+    @Column(columnDefinition = "TEXT", nullable = true, name="prov_freeform")
+    private String provFreeForm;
+
+    @OneToMany (mappedBy="fileMetadata", cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST})
+    private Collection<VariableMetadata> variableMetadatas;
+        
+    /**
+     * Creates a copy of {@code this}, with identical business logic fields.
+     * E.g., {@link #label} would be duplicated; {@link #version} will not.
+     * 
+     * @return A copy of {@code this}, except for the DB-related data.
+     */
+    public FileMetadata createCopy() {
+        FileMetadata fmd = new FileMetadata();
+        fmd.setCategories(new LinkedList<>(getCategories()) );
+        fmd.setDataFile( getDataFile() );
+        fmd.setDatasetVersion( getDatasetVersion() );
+        fmd.setDescription( getDescription() );
+        fmd.setLabel( getLabel() );
+        fmd.setRestricted( isRestricted() );
+        fmd.setDirectoryLabel(getDirectoryLabel());
+        
+        return fmd;
+    }
+    
     public String getLabel() {
         return label;
     }
@@ -60,6 +142,24 @@ public class FileMetadata implements Serializable {
         this.label = label;
     }
 
+    public FileMetadata() {
+        variableMetadatas = new ArrayList<VariableMetadata>();
+        varGroups = new ArrayList<VarGroup>();
+    }
+
+    public String getDirectoryLabel() {
+        return directoryLabel;
+    }
+
+    public void setDirectoryLabel(String directoryLabel) {
+        //Strip off beginning and ending \ // - .
+        // and replace any sequences/combinations of / and \ with a single /
+        if (directoryLabel != null) {
+            directoryLabel = StringUtil.sanitizeFileDirectory(directoryLabel);
+        }
+
+        this.directoryLabel = directoryLabel;
+    }
 
     public String getDescription() {
         return description;
@@ -69,15 +169,6 @@ public class FileMetadata implements Serializable {
         this.description = description;
     }
 
-    // TODO: remove the following 2 methods: -- L.A. beta 10
-    //public String getCategory() {
-    //    return category;
-    //}
-
-    //public void setCategory(String category) {
-    //    this.category = category;
-    //}
-
     public boolean isRestricted() {
         return restricted;
     }
@@ -85,16 +176,55 @@ public class FileMetadata implements Serializable {
     public void setRestricted(boolean restricted) {
         this.restricted = restricted;
     }
-    
 
-    /* 
+    @OneToMany(mappedBy="fileMetadata", cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST})
+    private List<VarGroup> varGroups;
+
+    public Collection<VariableMetadata> getVariableMetadatas() {
+        return variableMetadatas;
+    }
+
+    public List<VarGroup> getVarGroups() {
+        return varGroups;
+    }
+
+    public void setVariableMetadatas(Collection<VariableMetadata> variableMetadatas) {
+        this.variableMetadatas = variableMetadatas;
+    }
+
+    public void setVarGroups(List<VarGroup> varGroups) {
+        this.varGroups = varGroups;
+    }
+
+    /*
      * File Categories to which this version of the DataFile belongs: 
      */
-    @ManyToMany (cascade = {CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    @SerializedName("categories") //Used for OptionalFileParams serialization
+    @ManyToMany
     @JoinTable(indexes = {@Index(columnList="filecategories_id"),@Index(columnList="filemetadatas_id")})
+    @OrderBy("name")
     private List<DataFileCategory> fileCategories;
     
     public List<DataFileCategory> getCategories() {
+        if (fileCategories != null) {
+            /*
+             * fileCategories can sometimes be an
+             * org.eclipse.persistence.indirection.IndirectList When that happens, the
+             * comparator in the Collections.sort below is not called, possibly due to
+             * https://bugs.eclipse.org/bugs/show_bug.cgi?id=446236 which is Java 1.8+
+             * specific Converting to an ArrayList solves the problem, but the longer term
+             * solution may be in avoiding the IndirectList or moving to a new version of
+             * the jar it is in.
+             */
+            if (!(fileCategories instanceof ArrayList)) {
+                List<DataFileCategory> newDFCs = new ArrayList<DataFileCategory>();
+                for (DataFileCategory fdc : fileCategories) {
+                    newDFCs.add(fdc);
+                }
+                setCategories(newDFCs);
+            }
+            Collections.sort(fileCategories, FileMetadata.compareByNameWithSortCategories);
+        }
         return fileCategories;
     }
     
@@ -109,15 +239,45 @@ public class FileMetadata implements Serializable {
         fileCategories.add(category);
     }
 
+    /**
+     * Retrieve categories 
+     * @return 
+     */
     public List<String> getCategoriesByName() {
         ArrayList<String> ret = new ArrayList<>();
-        if (fileCategories != null) {
-            for (int i = 0; i < fileCategories.size(); i++) {
-                ret.add(fileCategories.get(i).getName());
-            }
+             
+        if (fileCategories == null) {
+            return ret;
         }
+        
+        for (DataFileCategory fileCategory : getCategories()) {
+            ret.add(fileCategory.getName());
+        }
+        // fileCategories.stream()
+        //              .map(x -> ret.add(x.getName()));
+       
         return ret;
     }
+    
+    public JsonArrayBuilder getCategoryNamesAsJsonArrayBuilder() {
+
+        JsonArrayBuilder builder = Json.createArrayBuilder();
+
+        if (fileCategories == null) {
+            return builder;
+        }
+        
+        for (DataFileCategory fileCategory : fileCategories) {
+            builder.add(fileCategory.getName());
+        }
+
+        //fileCategories.stream()
+        //              .map(x -> builder.add(x.getName()));
+        
+        return builder;
+        
+    }
+    
     
     // alternative, experimental method: 
 
@@ -126,16 +286,16 @@ public class FileMetadata implements Serializable {
 
         if (newCategoryNames != null) {
 
-            for (int i = 0; i < newCategoryNames.size(); i++) {
+            for (String newCategoryName : newCategoryNames) {
                 // Dataset.getCategoryByName() will check if such a category 
                 // already exists for the parent dataset; it will be created 
                 // if not. The method will return null if the supplied 
                 // category name is null or empty. -- L.A. 4.0 beta 10
-                DataFileCategory fileCategory = null;
+                DataFileCategory fileCategory;
                 try {
                     // Using "try {}" to catch any null pointer exceptions, 
                     // just in case: 
-                    fileCategory = this.getDatasetVersion().getDataset().getCategoryByName(newCategoryNames.get(i));
+                    fileCategory = this.getDatasetVersion().getDataset().getCategoryByName(newCategoryName);
                 } catch (Exception ex) {
                     fileCategory = null;
                 }
@@ -180,10 +340,10 @@ public class FileMetadata implements Serializable {
     */
     
     public void addCategoryByName(String newCategoryName) {
-        if (newCategoryName != null && !newCategoryName.equals("")) {
+        if (newCategoryName != null && !newCategoryName.isEmpty()) {
             Collection<String> oldCategoryNames = getCategoriesByName();
             if (!oldCategoryNames.contains(newCategoryName)) {
-                DataFileCategory fileCategory = null;
+                DataFileCategory fileCategory;
                 // Dataset.getCategoryByName() will check if such a category 
                 // already exists for the parent dataset; it will be created 
                 // if not. The method will return null if the supplied 
@@ -193,7 +353,9 @@ public class FileMetadata implements Serializable {
                     // just in case: 
                     fileCategory = this.getDatasetVersion().getDataset().getCategoryByName(newCategoryName);
                 } catch (Exception ex) {
-                    fileCategory = null;
+                    // If we failed to obtain an existing category, we'll create a new one:
+                    fileCategory = new DataFileCategory();
+                    fileCategory.setName(newCategoryName);
                 }
 
                 
@@ -212,8 +374,41 @@ public class FileMetadata implements Serializable {
         }
     }
     
-  
-    
+     public String getFileDateToDisplay() {
+        Date fileDate = null;
+        DataFile datafile = this.getDataFile();
+        if (datafile != null) {
+            boolean fileHasBeenReleased = datafile.isReleased();
+            if (fileHasBeenReleased) {
+                Timestamp filePublicationTimestamp = datafile.getPublicationDate();
+                if (filePublicationTimestamp != null) {
+                    fileDate = filePublicationTimestamp;
+                }
+            } else {
+                Timestamp fileCreateTimestamp = datafile.getCreateDate();
+                if (fileCreateTimestamp != null) {
+                    fileDate = fileCreateTimestamp;
+                }
+            }
+        }
+        if (fileDate != null) {
+            return DateUtil.formatDate(fileDate);
+        }
+        return "";
+    }
+
+    public String getFileCitation(){
+        return getFileCitation(false, false);
+    }
+
+    public String getFileCitation(boolean html, boolean anonymized){
+         return new DataCitation(this).toString(html, anonymized);
+    }
+
+    public String getDirectFileCitation(boolean html, boolean anonymized){
+        return new DataCitation(this, true).toString(html, anonymized);
+    }
+
     public DatasetVersion getDatasetVersion() {
         return datasetVersion;
     }
@@ -272,7 +467,63 @@ public class FileMetadata implements Serializable {
     public void setVersion(Long version) {
         this.version = version;
     }
+    
+    @Transient
+    private boolean inPriorVersion;
 
+    public boolean isInPriorVersion() {
+        return inPriorVersion;
+    }
+
+    public void setInPriorVersion(boolean inPriorVersion) {
+        this.inPriorVersion = inPriorVersion;
+    }
+
+    @Transient
+    private boolean selected;
+
+    public boolean isSelected() {
+        return selected;
+    }
+
+    public void setSelected(boolean selected) {
+        this.selected = selected;
+    }
+    
+    
+    @Transient
+    private boolean restrictedUI;
+
+    public boolean isRestrictedUI() {
+        return restrictedUI;
+    }
+
+    public void setRestrictedUI(boolean restrictedUI) {
+        this.restrictedUI = restrictedUI;
+    }
+    
+    @Transient
+    private FileVersionDifference fileVersionDifference ;
+
+    public FileVersionDifference getFileVersionDifference() {
+        return fileVersionDifference;
+    }
+
+    public void setFileVersionDifference(FileVersionDifference fileVersionDifference) {
+        this.fileVersionDifference = fileVersionDifference;
+    }
+    
+    @Transient
+    private String contributorNames;
+
+    public String getContributorNames() {
+        return contributorNames;
+    }
+
+    public void setContributorNames(String contributorNames) {
+        this.contributorNames = contributorNames;
+    }
+        
 
     @Override
     public int hashCode() {
@@ -290,49 +541,24 @@ public class FileMetadata implements Serializable {
         
         return !((this.id == null && other.id != null) || (this.id != null && !this.id.equals(other.id)));
     }
-
-    /* 
-     * An experimental method for comparing 2 file metadatas *by content*; i.e., 
-     * this would be for checking 2 metadatas from 2 different versions, to 
-     * determine if any of the actual metadata fields have changed between 
-     * versions. 
-    */
-    public boolean contentEquals(FileMetadata other) {
-        if (other == null) {
-            return false; 
-        }
-        
-        if (this.getLabel() != null) {
-            if (!this.getLabel().equals(other.getLabel())) {
-                return false;
-            }
-        } else if (other.getLabel() != null) {
-            return false;
-        }
-        
-        if (this.getDescription() != null) {
-            if (!this.getDescription().equals(other.getDescription())) {
-                return false;
-            }
-        } else if (other.getDescription() != null) {
-            return false;
-        }
-        
-        /* 
-         * we could also compare the sets of file categories; but since this 
-         * functionality is for deciding whether to index an extra filemetadata, 
-         * we're not doing it, as of now; because the categories are not indexed
-         * and not displayed on the search cards. 
-         * -- L.A. 4.0 beta12
-        */
-        
-        return true;
-    }
     
+    public boolean contentEquals(FileMetadata other) {
+    /* 
+       This method now invokes the logic contained in the FileVersionDifference compareMetadata method
+       so that the logic is in a single place
+    */
+        return compareContent(other);
+    }
+
+    
+    public boolean compareContent(FileMetadata other){
+         FileVersionDifference diffObj = new FileVersionDifference(this, other, false);
+         return diffObj.isSame();
+    }
     
     @Override
     public String toString() {
-        return "edu.harvard.iq.dvn.core.study.FileMetadata[id=" + id + "]";
+        return "edu.harvard.iq.dataverse.FileMetadata[id=" + id + "]";
     }
     
     public static final Comparator<FileMetadata> compareByLabel = new Comparator<FileMetadata>() {
@@ -340,5 +566,210 @@ public class FileMetadata implements Serializable {
         public int compare(FileMetadata o1, FileMetadata o2) {
             return o1.getLabel().toUpperCase().compareTo(o2.getLabel().toUpperCase());
         }
-    };    
+    };
+    
+    static Map<String,Long> categoryMap=null;
+    
+    public static void setCategorySortOrder(String categories) {
+       categoryMap=new HashMap<String, Long>();
+       long i=1;
+       for(String cat: categories.split(",\\s*")) {
+           categoryMap.put(cat.toUpperCase(), i);
+           i++;
+       }
+    }
+    
+    public static Map<String,Long> getCategorySortOrder() {
+        return categoryMap;
+    }
+    
+    
+    public static final Comparator<DataFileCategory> compareByNameWithSortCategories = new Comparator<DataFileCategory>() {
+        @Override
+        public int compare(DataFileCategory o1, DataFileCategory o2) {
+            if (categoryMap != null) {
+                //If one is in the map and one is not, the former is first, otherwise sort by name
+                boolean o1InMap = categoryMap.containsKey(o1.getName().toUpperCase()); 
+                boolean o2InMap = categoryMap.containsKey(o2.getName().toUpperCase());
+                if(o1InMap && !o2InMap) {
+                    return (-1);
+                }
+                if(!o1InMap && o2InMap) {
+                    return 1;
+                }
+            }
+            return(o1.getName().toUpperCase().compareTo(o2.getName().toUpperCase()));
+        }
+    };
+    
+    public static final Comparator<FileMetadata> compareByFullPath = new Comparator<FileMetadata>() {
+        @Override
+        public int compare(FileMetadata o1, FileMetadata o2) {
+            String folder1 = StringUtil.isEmpty(o1.getDirectoryLabel()) ? "" : o1.getDirectoryLabel().toUpperCase() + "/";
+            String folder2 = StringUtil.isEmpty(o2.getDirectoryLabel()) ? "" : o2.getDirectoryLabel().toUpperCase() + "/";
+            
+            return folder1.concat(o1.getLabel().toUpperCase()).compareTo(folder2.concat(o2.getLabel().toUpperCase()));
+        }
+    };
+    
+    
+    public String toPrettyJSON(){
+        
+        return serializeAsJSON(true);
+    }
+
+    public String toJSON(){
+        
+        return serializeAsJSON(false);
+    }
+    
+     /**
+     * 
+     * @param prettyPrint
+     * @return 
+     */
+    private String serializeAsJSON(boolean prettyPrint){
+        
+        JsonObject jsonObj = asGsonObject(prettyPrint);
+                
+        return jsonObj.toString();
+       
+    }
+
+    
+    public JsonObject asGsonObject(boolean prettyPrint){
+        
+        GsonBuilder builder;
+        if (prettyPrint){  // Add pretty printing
+            builder = new GsonBuilder().excludeFieldsWithoutExposeAnnotation().setPrettyPrinting();
+        } else {
+            builder = new GsonBuilder().excludeFieldsWithoutExposeAnnotation();                        
+        }
+        
+        Gson gson = builder.create();
+        
+        JsonElement jsonObj = gson.toJsonTree(this);
+        
+        //Add categories without the "name"
+        List<String> cats = this.getCategoriesByName();
+        JsonArray jsonCats = new JsonArray();
+        for(String t : cats) {
+            jsonCats.add(new JsonPrimitive(t));
+        }
+        if(jsonCats.size() > 0) {
+            jsonObj.getAsJsonObject().add(OptionalFileParams.CATEGORIES_ATTR_NAME, jsonCats);
+        }
+        
+        //Add tags without the "name"
+        List<String> tags = this.getDataFile().getTagLabels();
+        JsonArray jsonTags = new JsonArray();
+        for(String t : tags) {
+            jsonTags.add(new JsonPrimitive(t));
+        }
+        if(jsonTags.size() > 0) {
+            jsonObj.getAsJsonObject().add(OptionalFileParams.FILE_DATA_TAGS_ATTR_NAME, jsonTags);
+        }
+
+        jsonObj.getAsJsonObject().addProperty("id", this.getId());
+        
+        return jsonObj.getAsJsonObject();
+    }
+    
+    public String getProvFreeForm() {
+        return provFreeForm;
+    }
+
+    public void setProvFreeForm(String provFreeForm) {
+        this.provFreeForm = provFreeForm;
+    }
+
+    public void copyVariableMetadata(Collection<VariableMetadata> vml) {
+
+        if (variableMetadatas == null) {
+            variableMetadatas = new ArrayList<VariableMetadata>();
+        }
+
+        for (VariableMetadata vm : vml) {
+            VariableMetadata vmNew = null;
+            boolean flagNew = true;
+            for (VariableMetadata vmThis: variableMetadatas) {
+                if (vmThis.getDataVariable().getId().equals(vm.getDataVariable().getId())) {
+                    vmNew = vmThis;
+                    flagNew = false;
+                    break;
+                }
+            }
+            if (flagNew) {
+                vmNew = new VariableMetadata(vm.getDataVariable(), this);
+            }
+            vmNew.setIsweightvar(vm.isIsweightvar());
+            vmNew.setWeighted(vm.isWeighted());
+            vmNew.setWeightvariable(vm.getWeightvariable());
+            vmNew.setInterviewinstruction(vm.getInterviewinstruction());
+            vmNew.setLabel(vm.getLabel());
+            vmNew.setLiteralquestion(vm.getLiteralquestion());
+            vmNew.setNotes(vm.getNotes());
+            vmNew.setUniverse(vm.getUniverse());
+            vmNew.setPostquestion(vm.getPostquestion());
+
+            Collection<CategoryMetadata> cms = vm.getCategoriesMetadata();
+            if (flagNew) {
+                for (CategoryMetadata cm : cms) {
+                    CategoryMetadata cmNew = new CategoryMetadata(vmNew, cm.getCategory());
+                    cmNew.setWfreq(cm.getWfreq());
+                    vmNew.getCategoriesMetadata().add(cmNew);
+                }
+                variableMetadatas.add(vmNew);
+            } else {
+                Collection<CategoryMetadata> cmlThis = vm.getCategoriesMetadata();
+                for (CategoryMetadata cm : cms) {
+                    for (CategoryMetadata cmThis : cmlThis) {
+                        if (cm.getCategory().getId().equals(cmThis.getCategory().getId())) {
+                            cmThis.setWfreq(cm.getWfreq());
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+
+    public void copyVarGroups(Collection<VarGroup> vgl) {
+        if (varGroups != null) {
+            varGroups.clear();
+        }
+
+        for (VarGroup vg : vgl) {
+            VarGroup vgNew = new VarGroup(this);
+            for (DataVariable dv : vg.getVarsInGroup()) {
+                vgNew.getVarsInGroup().add(dv);
+            }
+            vgNew.setLabel(vg.getLabel());
+            if (varGroups == null) {
+                varGroups = new ArrayList<VarGroup>();
+            }
+            varGroups.add(vgNew);
+        }
+
+    }
+    
+    public Set<ConstraintViolation> validate() {
+        Set<ConstraintViolation> returnSet = new HashSet<>();
+
+        ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
+        Validator validator = factory.getValidator();
+        Set<ConstraintViolation<FileMetadata>> constraintViolations = validator.validate(this);
+        if (constraintViolations.size() > 0) {
+            // currently only support one message
+            ConstraintViolation<FileMetadata> violation = constraintViolations.iterator().next();
+            String message = "Constraint violation found in FileMetadata. "
+                    + violation.getMessage() + " "
+                    + "The invalid value is \"" + violation.getInvalidValue().toString() + "\".";
+            logger.info(message);
+            returnSet.add(violation);
+        }
+
+        return returnSet;
+    }
+    
 }

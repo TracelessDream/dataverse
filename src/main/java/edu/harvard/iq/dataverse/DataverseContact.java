@@ -7,14 +7,17 @@ package edu.harvard.iq.dataverse;
 
 import java.io.Serializable;
 import java.util.Objects;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import org.hibernate.validator.constraints.Email;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+
+import edu.harvard.iq.dataverse.validation.ValidateEmail;
 import org.hibernate.validator.constraints.NotBlank;
 
 /**
@@ -22,6 +25,9 @@ import org.hibernate.validator.constraints.NotBlank;
  * @author gdurand
  */
 @Entity
+@Table(indexes = {@Index(columnList="dataverse_id")
+		, @Index(columnList="contactemail")
+		, @Index(columnList="displayorder")})
 public class DataverseContact implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -54,8 +60,8 @@ public class DataverseContact implements Serializable {
     @JoinColumn(name = "dataverse_id")
     private Dataverse dataverse;
 
-    @NotBlank(message = "Please enter a valid email address.")
-    @ValidateEmail(message = "Please enter a valid email address.")
+    @NotBlank(message = "{user.invalidEmail}")
+    @ValidateEmail(message = "{user.invalidEmail}")
     @Column( nullable = false )
     private String contactEmail;
     private int displayOrder;
@@ -93,7 +99,7 @@ public class DataverseContact implements Serializable {
 
     @Override
     public boolean equals(Object object) {
-        if (!(object instanceof DatasetFieldType)) {
+        if (!(object instanceof DataverseContact)) {
             return false;
         }
         DataverseContact other = (DataverseContact) object;

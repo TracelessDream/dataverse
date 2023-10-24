@@ -8,8 +8,10 @@ import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
 import edu.harvard.iq.dataverse.util.SystemConfig;
 import java.util.List;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.inject.Inject;
+import jakarta.ejb.EJB;
+import jakarta.inject.Inject;
+
+import org.apache.commons.lang3.StringUtils;
 import org.swordapp.server.AuthCredentials;
 import org.swordapp.server.ServiceDocument;
 import org.swordapp.server.ServiceDocumentManager;
@@ -43,12 +45,9 @@ public class ServiceDocumentManagerImpl implements ServiceDocumentManager {
         String warning = urlManager.processUrl(sdUri);
         ServiceDocument service = new ServiceDocument();
         SwordWorkspace swordWorkspace = new SwordWorkspace();
-        Dataverse rootDataverse = dataverseService.findRootDataverse();
-        if (rootDataverse != null) {
-            String name = rootDataverse.getName();
-            if (name != null) {
-                swordWorkspace.setTitle(name);
-            }
+        String name = dataverseService.getRootDataverseName();
+        if (!StringUtils.isEmpty(name)) {
+            swordWorkspace.setTitle(name);
         }
         if (warning != null) {
             swordWorkspace.getWrappedWorkspace().setAttributeValue("warning", warning);
@@ -60,6 +59,12 @@ public class ServiceDocumentManagerImpl implements ServiceDocumentManager {
             return serviceDocument;
         }
 
+        /**
+         * We don't expect this to support Shibboleth groups because even though
+         * a Shibboleth user can have an API token the transient
+         * shibIdentityProvider String on AuthenticatedUser is only set when a
+         * SAML assertion is made at runtime via the browser.
+         */
         List<Dataverse> dataverses = permissionService.getDataversesUserHasPermissionOn(user, Permission.AddDataset);
         for (Dataverse dataverse : dataverses) {
             String dvAlias = dataverse.getAlias();

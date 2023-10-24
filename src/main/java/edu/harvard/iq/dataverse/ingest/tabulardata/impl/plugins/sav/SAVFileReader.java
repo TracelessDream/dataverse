@@ -19,21 +19,42 @@
 */
 package edu.harvard.iq.dataverse.ingest.tabulardata.impl.plugins.sav;
 
-import java.io.*;
-import java.nio.*;
-import java.util.logging.*;
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
-import java.util.*;
-import java.util.regex.*;
-import java.text.*;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TimeZone;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
-import org.apache.commons.lang.*;
 import org.apache.commons.codec.binary.Hex;
-import javax.inject.Inject;
-import javax.naming.Context;
-import javax.naming.InitialContext;
-import javax.naming.NamingException;
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import edu.harvard.iq.dataverse.DataTable;
 import edu.harvard.iq.dataverse.datavariable.DataVariable;
@@ -41,12 +62,10 @@ import edu.harvard.iq.dataverse.datavariable.SummaryStatistic;
 import edu.harvard.iq.dataverse.datavariable.VariableCategory;
 import edu.harvard.iq.dataverse.datavariable.VariableRange;
 
-import edu.harvard.iq.dataverse.ingest.plugin.spi.*;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataFileReader;
 import edu.harvard.iq.dataverse.ingest.tabulardata.spi.TabularDataFileReaderSpi;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataIngest;
-import edu.harvard.iq.dataverse.ingest.tabulardata.InvalidData; 
-
+import edu.harvard.iq.dataverse.ingest.tabulardata.InvalidData;
 
 
 /**
@@ -1421,7 +1440,7 @@ public class SAVFileReader  extends TabularDataFileReader{
         List<DataVariable> variableList = new ArrayList<DataVariable>();
 
         for (int i = 0; i < variableCounter; i++) {
-            DataVariable dv = new DataVariable();
+            DataVariable dv = new DataVariable(i, dataTable);
             String varName = variableNameList.get(i);
             dbgLog.fine("name: "+varName);
             dv.setName(varName);
@@ -1436,16 +1455,8 @@ public class SAVFileReader  extends TabularDataFileReader{
             }
             dbgLog.fine("label: "+varLabel);
             dv.setLabel(varLabel);
-            
-            dv.setInvalidRanges(new ArrayList<VariableRange>());
-            dv.setSummaryStatistics( new ArrayList<SummaryStatistic>());
-            dv.setUnf("UNF:6:");
-            dv.setCategories(new ArrayList<VariableCategory>());
             variableList.add(dv);
 
-            dv.setFileOrder(i);
-
-            dv.setDataTable(dataTable);
         }
 
         dataTable.setDataVariables(variableList);
@@ -1701,11 +1712,10 @@ public class SAVFileReader  extends TabularDataFileReader{
         // Let's go through all the categorical value label mappings and 
         // assign them to the correct variables: 
         
-        for (int i = 0; i < dataTable.getVarQuantity().intValue(); i++) {
+        for (DataVariable dataVariable : dataTable.getDataVariables()) {
+            String varName = dataVariable.getName();
             
-            String varName = dataTable.getDataVariables().get(i).getName();
-            
-            Map<String, String> valueLabelPairs = valueLabelTable.get(varName);
+            Map<String, String> valueLabelPairs = valueLabelTable.get(valueVariableMappingTable.get(varName));
             if (valueLabelPairs != null && !valueLabelPairs.isEmpty()) {
                 for (String value : valueLabelPairs.keySet()) {
                     
@@ -1714,8 +1724,8 @@ public class SAVFileReader  extends TabularDataFileReader{
                     cat.setLabel(valueLabelPairs.get(value));
 
                     /* cross-link the variable and category to each other: */
-                    cat.setDataVariable(dataTable.getDataVariables().get(i));
-                    dataTable.getDataVariables().get(i).getCategories().add(cat);
+                    cat.setDataVariable(dataVariable);
+                    dataVariable.getCategories().add(cat);
                 }
             }
         }

@@ -2,12 +2,13 @@ package edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip;
 
 import edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.IpGroup;
 import java.util.Objects;
-import javax.persistence.ManyToOne;
-import javax.persistence.MappedSuperclass;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.MappedSuperclass;
 
 /**
  * A range of {@link IpAddress}es. Abstract class - to instantiate, you need to
- * use one of the concrete subclasses of either IPv4 or IPv6.
+ * use one of the concrete subclasses of either IPv4 or IPv6, or the static 
+ * {@code make} methods.
  * @author michael
  */
 @MappedSuperclass
@@ -21,6 +22,10 @@ public abstract class IpAddressRange {
         } else {
             throw new IllegalArgumentException("Both addresses have to be of the same type (either IPv4 or IPv6)");
         }
+    }
+    
+    public static IpAddressRange makeSingle( IpAddress ipa ) { 
+        return make(ipa, ipa);
     }
     
     /**
@@ -63,6 +68,10 @@ public abstract class IpAddressRange {
                 && Objects.equals(this.getTop(), other.getTop());
     }
 
+    public boolean isSingleAddress() {
+        return getTop().equals(getBottom());
+    }
+    
     @Override
     public String toString() {
         return "[IpAddressRange " + getTop() + "-" + getBottom() + ']';

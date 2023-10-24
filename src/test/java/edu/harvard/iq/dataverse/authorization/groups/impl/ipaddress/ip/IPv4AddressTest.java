@@ -1,9 +1,10 @@
 package edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip;
 
-import edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip.IPv4Address;
+import java.math.BigInteger;
 import java.util.Arrays;
-import org.junit.Test;
-import static org.junit.Assert.*;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  *
@@ -21,9 +22,9 @@ public class IPv4AddressTest {
         assertEquals( new IPv4Address(127,0,0,1), IPv4Address.valueOf("127.0.0.1") );
     }
     
-    @Test( expected=IllegalArgumentException.class )
-    public void testValueOf_bad() {
-        IPv4Address.valueOf("1.2.3");
+    @Test
+    void testValueOf_bad() {
+        assertThrows(IllegalArgumentException.class, () -> IPv4Address.valueOf("1.2.3"));
     }
     
     @Test
@@ -57,7 +58,7 @@ public class IPv4AddressTest {
     
     @Test
     public void testLongRoundtrip() {
-        for ( IPv4Address addr : Arrays.asList(
+        Arrays.asList(
                 new IPv4Address(127,0,36,255),
                 new IPv4Address(0,0,0,0),
                 new IPv4Address(127,0,0,1),
@@ -67,10 +68,36 @@ public class IPv4AddressTest {
                 new IPv4Address(128,128,128,128),
                 new IPv4Address(127,127,127,127),
                 new IPv4Address(255,255,255,255),
-                new IPv4Address(255,0,34,1)) ) {
-            assertEquals( addr, new IPv4Address(addr.toLong()) );
-        }
+                new IPv4Address(255,0,34,1)
+        ).forEach( addr -> assertEquals( addr, new IPv4Address(addr.toLong())) );
     }
     
+    @Test
+    public void testBigIntegerRoundtrip() {
+        Arrays.asList(
+                new IPv4Address(0,0,0,0),
+                new IPv4Address(0,0,0,1),
+                new IPv4Address(0,0,1,0),
+                new IPv4Address(0,1,0,0),
+                new IPv4Address(1,0,0,0),
+                new IPv4Address(1,1,1,1),
+                new IPv4Address(0,0,127,1),
+                new IPv4Address(127,0,36,255),
+                new IPv4Address(127,0,0,1),
+                new IPv4Address(128,0,0,1),
+                new IPv4Address(0,0,128,1),
+                new IPv4Address(128,128,128,128),
+                new IPv4Address(127,127,127,127),
+                new IPv4Address(255,255,255,255),
+                new IPv4Address(255,0,34,1)
+        ).forEach( addr -> assertEquals( addr, new IPv4Address(addr.toBigInteger())) );
+    }
     
+    @Test
+    public void toBigInteger() {
+        assertEquals( BigInteger.ZERO, new IPv4Address(0,0,0,0).toBigInteger() );
+        assertEquals( BigInteger.ONE, new IPv4Address(0,0,0,1).toBigInteger() );
+        assertEquals( BigInteger.ONE.shiftLeft(8),
+                        new IPv4Address(0,0,1,0).toBigInteger() );
+    }
 }

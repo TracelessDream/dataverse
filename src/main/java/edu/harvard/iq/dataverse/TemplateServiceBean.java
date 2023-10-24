@@ -1,13 +1,14 @@
 package edu.harvard.iq.dataverse;
 
+import edu.harvard.iq.dataverse.search.IndexServiceBean;
 import java.util.List;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.ejb.Stateless;
-import javax.inject.Named;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-import javax.persistence.Query;
+import jakarta.ejb.EJB;
+import jakarta.ejb.Stateless;
+import jakarta.inject.Named;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.TypedQuery;
 
 /**
  *
@@ -29,39 +30,30 @@ public class TemplateServiceBean {
     }
 
     public Template save(Template template) {
-        if (template.getId() == null) {
-            em.persist(template);
-            return template;
-        } else {
-            return em.merge(template);
-        }
+        return em.merge(template);
     }
-
-    public Template findByDeafultTemplateOwnerId(Long ownerId) {
-        Query query = em.createQuery("select object(o.defaultTemplate) from Dataverse as o where o.owner.id =:ownerId order by o.name");
-        query.setParameter("ownerId", ownerId);
-        return (Template) query.getSingleResult();
+    
+    public List<Template> findByOwnerId(Long ownerId) {              
+        return em.createNamedQuery("Template.findByOwnerId", Template.class).setParameter("ownerId", ownerId).getResultList();
     }
-
+    
+    public List<Template> findAll() {
+        return em.createNamedQuery("Template.findAll", Template.class).getResultList();
+    }
     
     public List<Dataverse> findDataversesByDefaultTemplateId(Long defaultTemplateId) {
-        Query query = em.createQuery("select object(o) from Dataverse as o where o.defaultTemplate.id =:defaultTemplateId order by o.name");
+        TypedQuery<Dataverse> query = em.createQuery("select object(o) from Dataverse as o where o.defaultTemplate.id =:defaultTemplateId order by o.name", Dataverse.class);
         query.setParameter("defaultTemplateId", defaultTemplateId);
         return query.getResultList();
     }
-    
+
     public void incrementUsageCount(Long templateId) {
 
-        Long usageCount = (Long) em.createNativeQuery(
-                "select usageCount from  Template  "
-                + "WHERE id=" + templateId
-        ).getSingleResult();
-        
-        usageCount++;
-        
-        em.createNativeQuery(
-                "update Template SET  usagecount = " + usageCount + " "
-                + "WHERE id=" + templateId
-        ).executeUpdate();
+        Template toUpdate = em.find(Template.class, templateId);
+        Long usage = toUpdate.getUsageCount();
+        usage++;
+        toUpdate.setUsageCount(usage);
+        em.merge(toUpdate);
+
     }
 }

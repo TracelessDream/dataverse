@@ -1,19 +1,22 @@
 package edu.harvard.iq.dataverse.engine.command.impl;
 
 import edu.harvard.iq.dataverse.Dataverse;
-import edu.harvard.iq.dataverse.DataverseFacet;
 import edu.harvard.iq.dataverse.DataverseFieldTypeInputLevel;
 import edu.harvard.iq.dataverse.authorization.DataverseRole;
 import edu.harvard.iq.dataverse.RoleAssignment;
 import edu.harvard.iq.dataverse.authorization.Permission;
-import edu.harvard.iq.dataverse.authorization.users.User;
+import edu.harvard.iq.dataverse.authorization.groups.impl.explicit.ExplicitGroup;
 import edu.harvard.iq.dataverse.engine.command.AbstractVoidCommand;
 import edu.harvard.iq.dataverse.engine.command.CommandContext;
+import edu.harvard.iq.dataverse.engine.command.DataverseRequest;
 import edu.harvard.iq.dataverse.engine.command.RequiredPermissions;
 import edu.harvard.iq.dataverse.engine.command.RequiredPermissionsMap;
 import edu.harvard.iq.dataverse.engine.command.exception.CommandException;
 import edu.harvard.iq.dataverse.engine.command.exception.IllegalCommandException;
+import edu.harvard.iq.dataverse.search.DvObjectSolrDoc;
+import edu.harvard.iq.dataverse.search.IndexServiceBean;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Deletes a {@link Dataverse} - but only if it is empty.
@@ -27,8 +30,8 @@ public class DeleteDataverseCommand extends AbstractVoidCommand {
 
     private final Dataverse doomed;
 
-    public DeleteDataverseCommand(User u, Dataverse aDoomedDataverse) {
-        super(u, dv("doomed", aDoomedDataverse), dv("owner", aDoomedDataverse.getOwner()));
+    public DeleteDataverseCommand(DataverseRequest aRequest, Dataverse aDoomedDataverse) {
+        super(aRequest, dv("doomed", aDoomedDataverse), dv("owner", aDoomedDataverse.getOwner()));
         doomed = aDoomedDataverse;
     }
 
@@ -38,7 +41,7 @@ public class DeleteDataverseCommand extends AbstractVoidCommand {
         if (doomed.getOwner() == null) {
             throw new IllegalCommandException("Cannot delete the root dataverse", this);
         }
-
+        
         // make sure the dataverse is emptyw
         if (ctxt.dvObjects().hasData(doomed)) {
             throw new IllegalCommandException("Cannot delete non-empty dataverses", this);
@@ -52,34 +55,55 @@ public class DeleteDataverseCommand extends AbstractVoidCommand {
          ctxt.em().remove(merged);
          } */
         
-        //TODO Look at roles upon delete when permissions complete
-        //SEK 10/23/14
         // ASSIGNMENTS
-        for (RoleAssignment ra : ctxt.roles().directRoleAssignments(doomed)) {
+        for ( RoleAssignment ra : ctxt.roles().directRoleAssignments(doomed) ) {
             ctxt.em().remove(ra);
         }
         // ROLES
-        for (DataverseRole ra : ctxt.roles().findByOwnerId(doomed.getId())) {
+        for ( DataverseRole ra : ctxt.roles().findByOwnerId(doomed.getId()) ) {
             ctxt.em().remove(ra);
         }
         
-        // FACETS
-        for (DataverseFacet facet : doomed.getDataverseFacets(true)) {
-            DataverseFacet merged = ctxt.em().merge(facet);
-            ctxt.em().remove(merged);
+        // EXPLICIT GROUPS
+        for ( ExplicitGroup eg : ctxt.em().createNamedQuery("ExplicitGroup.findByOwnerId", ExplicitGroup.class)
+                                          .setParameter("ownerId", doomed.getId())
+                                          .getResultList() ) {
+            ctxt.explicitGroups().removeGroup(eg);
         }
-        doomed.setDataverseFacets(new ArrayList());
+        // FACETS handled with cascade on dataverse
 
         // Input Level
         for (DataverseFieldTypeInputLevel inputLevel : doomed.getDataverseFieldTypeInputLevels()) {
             DataverseFieldTypeInputLevel merged = ctxt.em().merge(inputLevel);
             ctxt.em().remove(merged);
         }
-        doomed.setDataverseFieldTypeInputLevels(new ArrayList());
+        doomed.setDataverseFieldTypeInputLevels(new ArrayList<>());
         // DATAVERSE
         Dataverse doomedAndMerged = ctxt.em().merge(doomed);
         ctxt.em().remove(doomedAndMerged);
+    }
+
+    @Override 
+    public boolean onSuccess(CommandContext ctxt, Object r) {
+
         // Remove from index        
         ctxt.index().delete(doomed);
+        List<String> solrIdsToDelete = new ArrayList<>();
+        List<DvObjectSolrDoc> definitionPoints = ctxt.solrIndex().determineSolrDocs(doomed);
+        definitionPoints.forEach(dvObjectSolrDoc -> {
+            boolean add = solrIdsToDelete.add(dvObjectSolrDoc.getSolrId() + IndexServiceBean.discoverabilityPermissionSuffix);
+        });
+        var deleteMultipleSolrIds = ctxt.solrIndex().deleteMultipleSolrIds(solrIdsToDelete);
+        /**
+        * @todo: this method currently always returns true because the 
+        * underlying methods (already existing) handle exceptions and don't 
+        * return a boolean value
+        * we need to consider reworking the code such that methods throw
+        * indexing exception to callers that may need to handle effects such
+        * as on data integrity where related operations like database updates
+        * or deletes are expected to be coordinated with indexing operations
+        */
+        return true;
     }
+
 }

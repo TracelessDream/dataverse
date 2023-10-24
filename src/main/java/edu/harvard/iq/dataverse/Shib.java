@@ -1,16 +1,10 @@
 package edu.harvard.iq.dataverse;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonIOException;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.google.gson.JsonSyntaxException;
 import edu.harvard.iq.dataverse.authorization.AuthenticatedUserDisplayInfo;
 import edu.harvard.iq.dataverse.authorization.AuthenticationServiceBean;
 import edu.harvard.iq.dataverse.authorization.UserIdentifier;
 import edu.harvard.iq.dataverse.authorization.UserRecordIdentifier;
-import edu.harvard.iq.dataverse.authorization.groups.impl.shib.ShibGroupServiceBean;
+import edu.harvard.iq.dataverse.authorization.groups.GroupServiceBean;
 import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinUser;
 import edu.harvard.iq.dataverse.authorization.providers.shib.ShibAuthenticationProvider;
 import edu.harvard.iq.dataverse.authorization.providers.shib.ShibServiceBean;
@@ -18,29 +12,28 @@ import edu.harvard.iq.dataverse.authorization.providers.shib.ShibUserNameFields;
 import edu.harvard.iq.dataverse.authorization.providers.shib.ShibUtil;
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
 import edu.harvard.iq.dataverse.settings.SettingsServiceBean;
+import edu.harvard.iq.dataverse.util.BundleUtil;
 import edu.harvard.iq.dataverse.util.JsfHelper;
 import edu.harvard.iq.dataverse.util.SystemConfig;
+import edu.harvard.iq.dataverse.validation.EMailValidator;
+import org.apache.commons.lang3.StringUtils;
+
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
-import java.util.UUID;
-import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.faces.application.FacesMessage;
-import javax.faces.context.ExternalContext;
-import javax.faces.context.FacesContext;
-import javax.faces.view.ViewScoped;
-import javax.inject.Inject;
-import javax.inject.Named;
-import javax.servlet.http.HttpServletRequest;
-import org.apache.commons.lang.StringUtils;
+import jakarta.ejb.EJB;
+import jakarta.ejb.EJBException;
+import jakarta.faces.application.FacesMessage;
+import jakarta.faces.context.ExternalContext;
+import jakarta.faces.context.FacesContext;
+import jakarta.faces.view.ViewScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import jakarta.servlet.http.HttpServletRequest;
 
 @ViewScoped
 @Named("Shib")
@@ -56,107 +49,20 @@ public class Shib implements java.io.Serializable {
     @EJB
     ShibServiceBean shibService;
     @EJB
-    ShibGroupServiceBean shibGroupService;
+    DataverseServiceBean dataverseService;
+    @EJB
+    GroupServiceBean groupService;
+    @EJB
+    UserNotificationServiceBean userNotificationService;
     @EJB
     SettingsServiceBean settingsService;
-    @EJB
-    SystemConfig systemConfig;
-    @EJB
-    DataverseServiceBean dataverseService;
+	@EJB
+	SystemConfig systemConfig;
 
     HttpServletRequest request;
 
-    /**
-     * @todo these are the attributes we are getting from the IdP at
-     * testshib.org. What other attributes should we expect?
-     *
-     * Here is a dump from https://pdurbin.pagekite.me/Shibboleth.sso/Session
-     *
-     * Miscellaneous
-     *
-     * Session Expiration (barring inactivity): 479 minute(s)
-     *
-     * Client Address: 10.0.2.2
-     *
-     * SSO Protocol: urn:oasis:names:tc:SAML:2.0:protocol
-     *
-     * Identity Provider: https://idp.testshib.org/idp/shibboleth
-     *
-     * Authentication Time: 2014-09-12T17:07:36.137Z
-     *
-     * Authentication Context Class:
-     * urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport
-     *
-     * Authentication Context Decl: (none)
-     *
-     *
-     *
-     * Attributes
-     *
-     * affiliation: Member@testshib.org;Staff@testshib.org
-     *
-     * cn: Me Myself And I
-     *
-     * entitlement: urn:mace:dir:entitlement:common-lib-terms
-     *
-     * eppn: myself@testshib.org
-     *
-     * givenName: Me Myself
-     *
-     * persistent-id:
-     * https://idp.testshib.org/idp/shibboleth!https://pdurbin.pagekite.me/shibboleth!zylzL+NruovU5OOGXDOL576jxfo=
-     *
-     * sn: And I
-     *
-     * telephoneNumber: 555-5555
-     *
-     * uid: myself
-     *
-     * unscoped-affiliation: Member;Staff
-     */
-    /**
-     * @todo Resolve potential confusing of having attibutes like "eppn" defined
-     * twice in this class.
-     *
-     * This was used early on in development and should be removed at some
-     * point.
-     */
-    @Deprecated
-    List<String> shibAttrs = Arrays.asList(
-            "Shib-Identity-Provider",
-            "uid",
-            "cn",
-            "sn",
-            "givenName",
-            "telephoneNumber",
-            "eppn",
-            "affiliation",
-            "unscoped-affiliation",
-            "entitlement",
-            "persistent-id"
-    );
-
-    List<String> shibValues = new ArrayList<>();
-    /**
-     * @todo make this configurable?
-     */
-    private final String shibIdpAttribute = "Shib-Identity-Provider";
-    /**
-     * @todo Make attribute used (i.e. "eppn") configurable:
-     * https://github.com/IQSS/dataverse/issues/1422
-     *
-     * OR *maybe* we can rely on people installing Dataverse to configure shibd
-     * to always send "eppn" as an attribute, via attribute mappings or what
-     * have you.
-     */
-    private final String uniquePersistentIdentifier = "eppn";
     private String userPersistentId;
     private String internalUserIdentifer;
-    private final String usernameAttribute = "uid";
-    private final String displayNameAttribute = "cn";
-    private final String firstNameAttribute = "givenName";
-    private final String lastNameAttribute = "sn";
-    private final String emailAttribute = "mail";
     AuthenticatedUserDisplayInfo displayInfo;
     /**
      * @todo Remove this boolean some day? Now the mockups show a popup. Should
@@ -191,28 +97,17 @@ public class Shib implements java.io.Serializable {
     private String existingEmail;
     private String existingDisplayName;
     private boolean passwordRejected;
-    private String displayNameToPersist = "(Blank: display name not received from Institution Log In)";
-//    private String firstNameToPersist = "(Blank: first name not received from Institution Log In)";
-//    private String lastNameToPersist = "(Blank: last name not received from Institution Log In)";
-    private String emailToPersist = "(Blank: email received from Institution Log In)";
-    /**
-     * @todo We're not really doing anything with affiliation yet, even though
-     * the mockups show it. The plan is to parse the JSON from
-     * https://dataverse.harvard.edu/Shibboleth.sso/DiscoFeed for example. Check
-     * the "ShibUtil" class
-     */
-    private String affiliationToDisplayAtConfirmation = "Affiliation not provided by institution log in";
-    /**
-     * @todo Once we can persist "position" to the authenticateduser table, we
-     * can revisit this. Maybe we'll use ORCID instead. Dunno.
-     */
-//    private String positionToPersist = "Position not provided by institution log in";
-    /**
-     * @todo localize this
-     */
-    private String friendlyNameForInstitution = "your institution";
+    private String displayNameToPersist;
+    private String emailToPersist;
+    private String affiliationToDisplayAtConfirmation = null;
+    private String friendlyNameForInstitution = BundleUtil.getStringFromBundle("shib.welcomeExistingUserMessageDefaultInstitution");
     private State state;
     private String debugSummary;
+    /**
+     * After a successful login, we will redirect users to this page (unless
+     * it's a new account).
+     */
+    private String redirectPage;
 //    private boolean debug = false;
     private String emailAddress;
 
@@ -228,11 +123,22 @@ public class Shib implements java.io.Serializable {
         state = State.INIT;
         ExternalContext context = FacesContext.getCurrentInstance().getExternalContext();
         request = (HttpServletRequest) context.getRequest();
+        ShibUtil.printAttributes(request);
 
-        possiblyMutateRequestInDev();
+        /**
+         * @todo Investigate why JkEnvVar is null since it may be useful for
+         * debugging per https://github.com/IQSS/dataverse/issues/2916 . See
+         * also
+         * http://stackoverflow.com/questions/30193117/iterate-through-all-servletrequest-attributes#comment49933342_30193117
+         * and
+         * http://shibboleth.1660669.n2.nabble.com/Why-doesn-t-Java-s-request-getAttributeNames-show-Shibboleth-attributes-tp7616427p7616591.html
+         */
+        logger.fine("JkEnvVar: " + System.getenv("JkEnvVar"));
+
+        shibService.possiblyMutateRequestInDev(request);
 
         try {
-            shibIdp = getRequiredValueFromAttribute(shibIdpAttribute);
+            shibIdp = getRequiredValueFromAssertion(ShibUtil.shibIdpAttribute);
         } catch (Exception ex) {
             /**
              * @todo is in an antipattern to throw exceptions to control flow?
@@ -245,19 +151,19 @@ public class Shib implements java.io.Serializable {
         }
         String shibUserIdentifier;
         try {
-            shibUserIdentifier = getRequiredValueFromAttribute(uniquePersistentIdentifier);
+            shibUserIdentifier = getRequiredValueFromAssertion(ShibUtil.uniquePersistentIdentifier);
         } catch (Exception ex) {
             return;
         }
         String firstName;
         try {
-            firstName = getRequiredValueFromAttribute(firstNameAttribute);
+            firstName = getRequiredValueFromAssertion(ShibUtil.firstNameAttribute);
         } catch (Exception ex) {
             return;
         }
         String lastName;
         try {
-            lastName = getRequiredValueFromAttribute(lastNameAttribute);
+            lastName = getRequiredValueFromAssertion(ShibUtil.lastNameAttribute);
         } catch (Exception ex) {
             return;
         }
@@ -272,48 +178,86 @@ public class Shib implements java.io.Serializable {
                 lastName = betterLastName;
             }
         }
+        String emailAddressInAssertion = null;
         try {
-            emailAddress = getRequiredValueFromAttribute(emailAttribute);
+            emailAddressInAssertion = getRequiredValueFromAssertion(ShibUtil.emailAttribute);
         } catch (Exception ex) {
-            String testShibIdpEntityId = "https://idp.testshib.org/idp/shibboleth";
-            if (shibIdp.equals(testShibIdpEntityId)) {
-                logger.info("For " + testShibIdpEntityId + " (which as of this writing doesn't provide the " + emailAttribute + " attribute) setting email address to value of eppn: " + shibUserIdentifier);
-                emailAddress = shibUserIdentifier;
+            if (shibIdp.equals(ShibUtil.testShibIdpEntityId)) {
+                logger.info("For " + shibIdp + " (which as of this writing doesn't provide the " + ShibUtil.emailAttribute + " attribute) setting email address to value of eppn: " + shibUserIdentifier);
+                emailAddressInAssertion = shibUserIdentifier;
             } else {
                 // forcing all other IdPs to send us an an email
                 return;
             }
         }
-        internalUserIdentifer = generateFriendlyLookingUserIdentifer(usernameAttribute, emailAttribute);
-        logger.info("friendly looking identifer (backend will enforce uniqueness):" + internalUserIdentifer);
 
-        /**
-         * @todo Remove, longer term. For now, commenting out special logic for
-         * always showing Terms of Use for TestShib accounts. The Terms of Use
-         * workflow is captured at
-         * http://datascience.iq.harvard.edu/blog/try-out-single-sign-shibboleth-40-beta
-         */
-//        if (shibIdp.equals("https://idp.testshib.org/idp/shibboleth")) {
-//            StringBuilder sb = new StringBuilder();
-//            String freshNewShibUser = sb.append(userIdentifier).append(UUID.randomUUID()).toString();
-//            logger.info("Will create a new, unique user so the account Terms of Use will be displayed.");
-//            userIdentifier = freshNewShibUser;
-//        }
-        /**
-         * @todo Shouldn't we persist the displayName too? It still exists on
-         * the authenticateduser table.
-         */
-//        String displayName = getDisplayName(displayNameAttribute, firstNameAttribute, lastNameAttribute);
-        String affiliation = getAffiliation();
+        if (!EMailValidator.isEmailValid(emailAddressInAssertion)) {
+            String msg = "The SAML assertion contained an invalid email address: \"" + emailAddressInAssertion + "\".";
+            logger.info(msg);
+            msg=BundleUtil.getStringFromBundle("shib.invalidEmailAddress",   Arrays.asList(emailAddressInAssertion));
+            String singleEmailAddress = ShibUtil.findSingleValue(emailAddressInAssertion);
+            if (EMailValidator.isEmailValid(singleEmailAddress)) {
+                msg = "Multiple email addresses were asserted by the Identity Provider (" + emailAddressInAssertion + " ). These were sorted and the first was chosen: " + singleEmailAddress;
+                logger.info(msg);
+                emailAddress = singleEmailAddress;
+            } else {
+                msg += BundleUtil.getStringFromBundle("shib.emailAddress.error");
+                FacesContext.getCurrentInstance().addMessage(null, new FacesMessage(FacesMessage.SEVERITY_ERROR, identityProviderProblem, msg));
+                return;
+            }
+        } else {
+            emailAddress = emailAddressInAssertion;
+        }
+
+        String usernameAssertion = getValueFromAssertion(ShibUtil.usernameAttribute);
+        internalUserIdentifer = ShibUtil.generateFriendlyLookingUserIdentifer(usernameAssertion, emailAddress);
+        logger.fine("friendly looking identifer (backend will enforce uniqueness):" + internalUserIdentifer);
+
+        String shibAffiliationAttribute = settingsService.getValueForKey(SettingsServiceBean.Key.ShibAffiliationAttribute);
+        String affiliation = (StringUtils.isNotBlank(shibAffiliationAttribute))
+            ? getValueFromAssertion(shibAffiliationAttribute)
+            : shibService.getAffiliation(shibIdp, shibService.getDevShibAccountType());
+
+
+        if (affiliation != null) {
+            String ShibAffiliationSeparator = settingsService.getValueForKey(SettingsServiceBean.Key.ShibAffiliationSeparator);
+            if (ShibAffiliationSeparator == null) {
+                ShibAffiliationSeparator = ";";
+            }
+            String ShibAffiliationOrder = settingsService.getValueForKey(SettingsServiceBean.Key.ShibAffiliationOrder);
+            if (ShibAffiliationOrder != null) {
+                if (ShibAffiliationOrder.equals("lastAffiliation")) {
+                    affiliation = affiliation.substring(affiliation.lastIndexOf(ShibAffiliationSeparator) + 1); //patch for affiliation array returning last part
+                }
+                else if (ShibAffiliationOrder.equals("firstAffiliation")) {
+                    try{
+                        affiliation = affiliation.substring(0,affiliation.indexOf(ShibAffiliationSeparator)); //patch for affiliation array returning first part
+                    }
+                    catch (Exception e){
+                        logger.info("Affiliation does not contain \"" + ShibAffiliationSeparator + "\"");
+                    }
+                }
+            }
+            affiliationToDisplayAtConfirmation = affiliation;
+            friendlyNameForInstitution = affiliation;
+        }
+//        emailAddress = "willFailBeanValidation"; // for testing createAuthenticatedUser exceptions
         displayInfo = new AuthenticatedUserDisplayInfo(firstName, lastName, emailAddress, affiliation, null);
 
         userPersistentId = shibIdp + persistentUserIdSeparator + shibUserIdentifier;
         ShibAuthenticationProvider shibAuthProvider = new ShibAuthenticationProvider();
         AuthenticatedUser au = authSvc.lookupUser(shibAuthProvider.getId(), userPersistentId);
         if (au != null) {
+            //See if there's another account with this email
+            AuthenticatedUser auEmail = authSvc.getAuthenticatedUserByEmail(emailAddress);
+            if (auEmail!= null && !auEmail.equals(au)){   
+                //If this email already belongs to another account throw a message for user to contact support
+                JsfHelper.addErrorMessage(BundleUtil.getStringFromBundle("shib.duplicate.email.error"));
+                return;
+            }
             state = State.REGULAR_LOGIN_INTO_EXISTING_SHIB_ACCOUNT;
-            logger.info("Found user based on " + userPersistentId + ". Logging in.");
-            logger.info("Updating display info for " + au.getName());
+            logger.fine("Found user based on " + userPersistentId + ". Logging in.");
+            logger.fine("Updating display info for " + au.getName());
             authSvc.updateAuthenticatedUser(au, displayInfo);
             logInUserAndSetShibAttributes(au);
             String prettyFacesHomePageString = getPrettyFacesHomePageString(false);
@@ -325,15 +269,7 @@ public class Shib implements java.io.Serializable {
         } else {
             state = State.PROMPT_TO_CREATE_NEW_ACCOUNT;
             displayNameToPersist = displayInfo.getTitle();
-//            firstNameToPersist = "foo";
-//            lastNameToPersist = "bar";
             emailToPersist = emailAddress;
-            /**
-             * @todo For Harvard at least, we plan to use "Harvard University"
-             * for affiliation because it's what we get from
-             * https://dataverse.harvard.edu/Shibboleth.sso/DiscoFeed
-             */
-//            affiliationToPersist = "FIXME";
             /**
              * @todo for Harvard we plan to use the value(s) from
              * eduPersonScopedAffiliation which
@@ -348,7 +284,7 @@ public class Shib implements java.io.Serializable {
              * eduPersonScopedAffiliation?
              */
 //            positionToPersist = "FIXME";
-            logger.info("Couldn't find authenticated user based on " + userPersistentId);
+            logger.fine("Couldn't find authenticated user based on " + userPersistentId);
             visibleTermsOfUse = true;
             /**
              * Using the email address from the IdP, try to find an existing
@@ -369,7 +305,7 @@ public class Shib implements java.io.Serializable {
                 existingBuiltInUserFoundByEmail = shibService.findBuiltInUserByAuthUserIdentifier(existingAuthUserFoundByEmail.getUserIdentifier());
                 if (existingBuiltInUserFoundByEmail != null) {
                     state = State.PROMPT_TO_CONVERT_EXISTING_ACCOUNT;
-                    existingDisplayName = existingBuiltInUserFoundByEmail.getDisplayName();
+
                     debugSummary = "getting username from the builtin user we looked up via email";
                     builtinUsername = existingBuiltInUserFoundByEmail.getUserName();
                 } else {
@@ -380,165 +316,37 @@ public class Shib implements java.io.Serializable {
             }
 
         }
-//        if (debug) {
-//            printAttributes(request);
-//        }
-    }
-
-    /**
-     * @todo Move this to the shib service bean.
-     */
-    private String getAffiliation() {
-        JsonArray emptyJsonArray = new JsonArray();
-        String discoFeedJson = emptyJsonArray.toString();
-        String discoFeedUrl;
-        if (getDevShibAccountType().equals(DevShibAccountType.PRODUCTION)) {
-            discoFeedUrl = systemConfig.getDataverseSiteUrl() + "/Shibboleth.sso/DiscoFeed";
-        } else {
-            String devUrl = "http://localhost:8080/resources/dev/sample-shib-identities.json";
-            discoFeedUrl = devUrl;
-        }
-        logger.info("Trying to get affiliation from disco feed URL: " + discoFeedUrl);
-        URL url = null;
-        try {
-            url = new URL(discoFeedUrl);
-        } catch (MalformedURLException ex) {
-            logger.info(ex.toString());
-            return null;
-        }
-        if (url == null) {
-            logger.info("url object was null after parsing " + discoFeedUrl);
-            return null;
-        }
-        HttpURLConnection discoFeedRequest = null;
-        try {
-            discoFeedRequest = (HttpURLConnection) url.openConnection();
-        } catch (IOException ex) {
-            logger.info(ex.toString());
-            return null;
-        }
-        if (discoFeedRequest == null) {
-            logger.info("disco feed request was null");
-            return null;
-        }
-        try {
-            discoFeedRequest.connect();
-        } catch (IOException ex) {
-            logger.info(ex.toString());
-            return null;
-        }
-        JsonParser jp = new JsonParser();
-        JsonElement root = null;
-        try {
-            root = jp.parse(new InputStreamReader((InputStream) discoFeedRequest.getInputStream()));
-        } catch (IOException ex) {
-            logger.info(ex.toString());
-            return null;
-        }
-        if (root == null) {
-            logger.info("root was null");
-            return null;
-        }
-        JsonArray rootArray = root.getAsJsonArray();
-        if (rootArray == null) {
-            logger.info("Couldn't get JSON Array from URL");
-            return null;
-        }
-        discoFeedJson = rootArray.toString();
-        logger.fine("Dump of disco feed:" + discoFeedJson);
-        String affiliation = ShibUtil.getDisplayNameFromDiscoFeed(shibIdp, discoFeedJson);
-        if (affiliation != null) {
-            affiliationToDisplayAtConfirmation = affiliation;
-            friendlyNameForInstitution = affiliation;
-            return affiliation;
-        } else {
-            logger.info("Couldn't find an affiliation from  " + shibIdp);
-            return null;
-        }
-    }
-
-    /**
-     * "Production" means "don't mess with the HTTP request".
-     */
-    public enum DevShibAccountType {
-
-        PRODUCTION,
-        RANDOM,
-        TESTSHIB1,
-        HARVARD1,
-        HARVARD2,
-    };
-
-    private DevShibAccountType getDevShibAccountType() {
-        DevShibAccountType saneDefault = DevShibAccountType.PRODUCTION;
-        String settingReturned = settingsService.getValueForKey(SettingsServiceBean.Key.DebugShibAccountType);
-        logger.fine("setting returned: " + settingReturned);
-        if (settingReturned != null) {
-            try {
-                DevShibAccountType parsedValue = DevShibAccountType.valueOf(settingReturned);
-                return parsedValue;
-            } catch (IllegalArgumentException ex) {
-                logger.info("Couldn't parse value: " + ex + " - returning a sane default: " + saneDefault);
-                return saneDefault;
-            }
-        } else {
-            logger.fine("Shibboleth dev mode has not been configured. Returning a sane default: " + saneDefault);
-            return saneDefault;
-        }
-
-    }
-
-    /**
-     * This method exists so developers don't have to run Shibboleth locally.
-     * You can populate the request with Shibboleth attributes by changing a
-     * setting like this:
-     *
-     * curl http://localhost:8080/api/s/settings/:DebugShibAccountType -X PUT -d
-     * RANDOM
-     *
-     * When you're done, feel free to delete the setting:
-     *
-     * curl -X DELETE http://localhost:8080/api/s/settings/:DebugShibAccountType
-     */
-    private void possiblyMutateRequestInDev() {
-        switch (getDevShibAccountType()) {
-            case PRODUCTION:
-                logger.fine("Request will not be mutated");
-                break;
-
-            case RANDOM:
-                mutateRequestForDevRandom();
-                break;
-
-            case TESTSHIB1:
-                mutateRequestForDevConstantTestShib1();
-                break;
-
-            case HARVARD1:
-                mutateRequestForDevConstantHarvard1();
-                break;
-
-            case HARVARD2:
-                mutateRequestForDevConstantHarvard2();
-                break;
-
-            default:
-                logger.info("Should never reach here");
-                break;
-        }
+        logger.fine("Debug summary: " + debugSummary + " (state: " + state + ").");
+        logger.fine("redirectPage: " + redirectPage);
     }
 
     public String confirmAndCreateAccount() {
         ShibAuthenticationProvider shibAuthProvider = new ShibAuthenticationProvider();
         String lookupStringPerAuthProvider = userPersistentId;
-        AuthenticatedUser au = authSvc.createAuthenticatedUser(
-                new UserRecordIdentifier(shibAuthProvider.getId(), lookupStringPerAuthProvider), internalUserIdentifer, displayInfo, true);
-        if (au != null) {
-            logger.info("created user " + au.getIdentifier());
-        } else {
-            logger.info("couldn't create user " + userPersistentId);
+        AuthenticatedUser au = null;
+        try {
+            au = authSvc.createAuthenticatedUser(
+                    new UserRecordIdentifier(shibAuthProvider.getId(), lookupStringPerAuthProvider), internalUserIdentifer, displayInfo, true);
+        } catch (EJBException ex) {
+            /**
+             * @todo Show the ConstraintViolationException, if any.
+             */
+            logger.info("Couldn't create user " + userPersistentId + " due to exception: " + ex.getCause());
         }
-        logInUserAndSetShibAttributes(au);
+        if (au != null) {
+            logger.fine("created user " + au.getIdentifier());
+            logInUserAndSetShibAttributes(au);
+            /**
+             * @todo Move this to
+             * AuthenticationServiceBean.createAuthenticatedUser
+             */
+            userNotificationService.sendNotification(au,
+                    new Timestamp(new Date().getTime()),
+                    UserNotification.Type.CREATEACC, null);
+            return "/dataverseuser.xhtml?selectTab=accountInfo&faces-redirect=true";
+        } else {
+            JsfHelper.addErrorMessage(BundleUtil.getStringFromBundle("shib.createUser.fail"));
+        }
         return getPrettyFacesHomePageString(true);
     }
 
@@ -547,16 +355,21 @@ public class Shib implements java.io.Serializable {
         ShibAuthenticationProvider shibAuthProvider = new ShibAuthenticationProvider();
         String lookupStringPerAuthProvider = userPersistentId;
         UserIdentifier userIdentifier = new UserIdentifier(lookupStringPerAuthProvider, internalUserIdentifer);
-        logger.info("builtin username: " + builtinUsername);
-        AuthenticatedUser builtInUserToConvert = shibService.canLogInAsBuiltinUser(builtinUsername, builtinPassword);
+        logger.fine("builtin username: " + builtinUsername);
+        AuthenticatedUser builtInUserToConvert = authSvc.canLogInAsBuiltinUser(builtinUsername, builtinPassword);
         if (builtInUserToConvert != null) {
+            if (builtInUserToConvert.isDeactivated()) {
+                JsfHelper.addErrorMessage(BundleUtil.getStringFromBundle("shib.convert.fail.deactivated"));
+                return null;
+            }
+            // TODO: Switch from authSvc.convertBuiltInToShib to authSvc.convertBuiltInUserToRemoteUser
             AuthenticatedUser au = authSvc.convertBuiltInToShib(builtInUserToConvert, shibAuthProvider.getId(), userIdentifier);
             if (au != null) {
                 authSvc.updateAuthenticatedUser(au, displayInfo);
                 logInUserAndSetShibAttributes(au);
                 debugSummary = "Local account validated and successfully converted to a Shibboleth account. The old account username was " + builtinUsername;
-                JsfHelper.addSuccessMessage("Your Dataverse account is now associated with your institutional account.");
-                return getPrettyFacesHomePageString(true);
+                JsfHelper.addSuccessMessage(BundleUtil.getStringFromBundle("dataverse.shib.success"));
+                return "/dataverseuser.xhtml?selectTab=accountInfo&faces-redirect=true";
             } else {
                 debugSummary = "Local account validated but unable to convert to Shibboleth account.";
             }
@@ -569,7 +382,17 @@ public class Shib implements java.io.Serializable {
 
     private void logInUserAndSetShibAttributes(AuthenticatedUser au) {
         au.setShibIdentityProvider(shibIdp);
+        // setUser checks for deactivated users.
         session.setUser(au);
+        logger.fine("Groups for user " + au.getId() + " (" + au.getIdentifier() + "): " + getGroups(au));
+    }
+
+    public List<String> getGroups(AuthenticatedUser au) {
+        List<String> groups = new ArrayList<>();
+        groupService.groupsFor(au, null).stream().forEach((group) -> {
+            groups.add(group.getDisplayName() + " (" + group.getIdentifier() + ")");
+        });
+        return groups;
     }
 
     /**
@@ -584,139 +407,59 @@ public class Shib implements java.io.Serializable {
         return loginpage + "?faces-redirect=true";
     }
 
-    public List<String> getShibValues() {
-        return shibValues;
-    }
-
-//    private void printAttributes(HttpServletRequest request) {
-//        for (String attr : shibAttrs) {
-//
-//            /**
-//             * @todo explain in Installers Guide that in order for these
-//             * attributes to be found attributePrefix="AJP_" must be added to
-//             * /etc/shibboleth/shibboleth2.xml like this:
-//             *
-//             * <ApplicationDefaults entityID="https://dataverse.org/shibboleth"
-//             * REMOTE_USER="eppn" attributePrefix="AJP_">
-//             *
-//             */
-//            Object attrObject = request.getAttribute(attr);
-//            if (attrObject != null) {
-//                shibValues.add(attr + ": " + attrObject.toString());
-//            }
-//        }
-//        logger.info("shib values: " + shibValues);
-//    }
     /**
-     * @return The value of a Shib attribute (if non-empty) or null.
+     * @return The trimmed value of a Shib attribute (if non-empty) or null.
+     *
+     * @todo Move this to ShibUtil
      */
-    private String getValueFromAttribute(String attribute) {
-        Object attributeObject = request.getAttribute(attribute);
-        if (attributeObject != null) {
-            String attributeValue = attributeObject.toString();
-            if (!attributeValue.isEmpty()) {
-                return attributeValue;
+    private String getValueFromAssertion(String key) {
+        Object attribute = request.getAttribute(key);
+        if (attribute != null) {
+            String attributeValue = attribute.toString();
+            String trimmedValue = attributeValue.trim();
+            if (!trimmedValue.isEmpty()) {
+                logger.fine("The SAML assertion for \"" + key + "\" (optional) was \"" + attributeValue + "\" and was trimmed to \"" + trimmedValue + "\".");
+                return trimmedValue;
+            } else {
+                logger.fine("The SAML assertion for \"" + key + "\" (optional) was \"" + attributeValue + "\" and was trimmed to \"" + trimmedValue + "\" (empty string). Returing null.");
+                return null;
             }
+        } else {
+            logger.fine("The SAML assertion for \"" + key + "\" (optional) was null.");
+            return null;
         }
-        return null;
     }
 
-    private String getRequiredValueFromAttribute(String attribute) throws Exception {
-        Object attributeObject = request.getAttribute(attribute);
-        if (attributeObject == null) {
-            String msg = " the attribute \"" + attribute + "\" was null. Please contact support.";
+    /**
+     * @return The trimmed value of a Shib attribute (if non-empty) or null.
+     *
+     * @todo Move this to ShibUtil. More objects might be required since
+     * sometimes we want to show messages, etc.
+     */
+    private String getRequiredValueFromAssertion(String key) throws Exception {
+        Object attribute = request.getAttribute(key);
+        if (attribute == null) {
+            String msg = "The SAML assertion for \"" + key + "\" was null. Please contact support.";
             logger.info(msg);
-            FacesContext.getCurrentInstance().addMessage(null, new FacesMessage(FacesMessage.SEVERITY_ERROR, identityProviderProblem, msg));
+            boolean showMessage = true;
+            if (shibIdp.equals(ShibUtil.testShibIdpEntityId) && key.equals(ShibUtil.emailAttribute)) {
+                showMessage = false;
+            }
+            if (showMessage) {
+                FacesContext.getCurrentInstance().addMessage(null, new FacesMessage(FacesMessage.SEVERITY_ERROR, identityProviderProblem, BundleUtil.getStringFromBundle("shib.nullerror",Arrays.asList(key))));
+            }
             throw new Exception(msg);
         }
-        String attributeValue = attributeObject.toString();
+        String attributeValue = attribute.toString();
         if (attributeValue.isEmpty()) {
-            throw new Exception(attribute + " was empty");
+            throw new Exception(key + " was empty");
         }
-        return attributeValue;
-    }
-
-    /**
-     * @todo Move logic to ShibServiceBean
-     */
-    private String generateFriendlyLookingUserIdentifer(String usernameNameAttribute, String emailAttribute) {
-        Object usernameObject = request.getAttribute(usernameNameAttribute);
-        if (usernameObject != null) {
-            String userIdentifier = usernameObject.toString();
-            if (!userIdentifier.isEmpty()) {
-                return userIdentifier;
-            }
-        } else {
-            logger.info("username attribute not sent by IdP");
-        }
-        Object emailObject = request.getAttribute(emailAttribute);
-        if (emailObject != null) {
-            String email = emailObject.toString();
-            if (!email.isEmpty()) {
-                /**
-                 * @todo Just grab the first part of the email
-                 */
-                String[] parts = email.split("@");
-                try {
-                    String firstPart = parts[0];
-                    return firstPart;
-                } catch (ArrayIndexOutOfBoundsException ex) {
-                    logger.info("odd email address. no @ sign: " + email);
-                }
-            }
-        } else {
-            logger.info("email attribute not sent by IdP");
-        }
-        logger.info("the best we can do is generate a random UUID");
-        return UUID.randomUUID().toString();
-    }
-
-    /**
-     * @return The best display name we can retrieve or construct based on
-     * attributes received from Shibboleth. Shouldn't be null, maybe "Unknown"
-     *
-     * @deprecated AuthenticatedUserDisplayInfo has no place for a display name.
-     */
-    @Deprecated
-    private String getDisplayName(String displayNameAttribute, String firstNameAttribute, String lastNameAttribute) {
-        Object displayNameObject = request.getAttribute(displayNameAttribute);
-        if (displayNameObject != null) {
-            String displayName = displayNameObject.toString();
-            if (!displayName.isEmpty()) {
-                return displayName;
-            } else {
-                return getDisplayNameFromFirstNameLastName(firstNameAttribute, lastNameAttribute);
-            }
-        } else {
-            return getDisplayNameFromFirstNameLastName(firstNameAttribute, lastNameAttribute);
-        }
-    }
-
-    /**
-     * @return First name plus last name if available, just first name or just
-     * last name or "Unknown".
-     *
-     * @deprecated AuthenticatedUserDisplayInfo has no place for a display name.
-     */
-    @Deprecated
-    private String getDisplayNameFromFirstNameLastName(String firstNameAttribute, String lastNameAttribute) {
-        /**
-         * @todo Should the first name attribute be required?
-         */
-        String firstName = getValueFromAttribute(firstNameAttribute);
-        /**
-         * @todo Should the last name attribute be required?
-         */
-        String lastName = getValueFromAttribute(lastNameAttribute);
-        if (firstName != null && lastName != null) {
-            return firstName + " " + lastName;
-        } else if (firstName != null) {
-            return firstName;
-        } else if (lastName != null) {
-            return lastName;
-        } else {
-            return "Unknown";
-        }
+		if(systemConfig.isShibAttributeCharacterSetConversionEnabled()) {
+			attributeValue= new String( attributeValue.getBytes("ISO-8859-1"), "UTF-8");
+		}
+        String trimmedValue = attributeValue.trim();
+        logger.fine("The SAML assertion for \"" + key + "\" (required) was \"" + attributeValue + "\" and was trimmed to \"" + trimmedValue + "\".");
+        return trimmedValue;
     }
 
     public String getRootDataverseAlias() {
@@ -741,29 +484,26 @@ public class Shib implements java.io.Serializable {
      * logic per https://github.com/IQSS/dataverse/issues/1551
      */
     public String getPrettyFacesHomePageString(boolean includeFacetDashRedirect) {
+        if (redirectPage != null) {
+            return redirectPage;
+        }
         String plainHomepageString = "/dataverse.xhtml";
         String rootDvAlias = getRootDataverseAlias();
         if (includeFacetDashRedirect) {
             if (rootDvAlias != null) {
-                return plainHomepageString + "?alias=" + rootDvAlias + "&faces-redirect=true";
+                return plainHomepageString + "?alias="  + rootDvAlias + "&faces-redirect=true";
             } else {
-                return plainHomepageString + "?faces-redirect=true";
+                return  plainHomepageString + "?faces-redirect=true";
             }
+        } else if (rootDvAlias != null) {
+            /**
+             * @todo Is there a constant for "/dataverse/" anywhere? I guess
+             * we'll just hard-code it here.
+             */
+            return "/dataverse/" + rootDvAlias;
         } else {
-            if (rootDvAlias != null) {
-                /**
-                 * @todo Is there a constant for "/dataverse/" anywhere? I guess
-                 * we'll just hard-code it here.
-                 */
-                return "/dataverse/" + rootDvAlias;
-            } else {
-                return plainHomepageString;
-            }
+            return plainHomepageString;
         }
-    }
-
-    public boolean isDebug() {
-        return systemConfig.isDebugEnabled();
     }
 
     public boolean isInit() {
@@ -782,12 +522,6 @@ public class Shib implements java.io.Serializable {
         return displayNameToPersist;
     }
 
-//    public String getFirstNameToPersist() {
-//        return firstNameToPersist;
-//    }
-//    public String getLastNameToPersist() {
-//        return lastNameToPersist;
-//    }
     public String getEmailToPersist() {
         return emailToPersist;
     }
@@ -796,9 +530,6 @@ public class Shib implements java.io.Serializable {
         return affiliationToDisplayAtConfirmation;
     }
 
-//    public String getPositionToPersist() {
-//        return positionToPersist;
-//    }
     public String getExistingEmail() {
         return existingEmail;
     }
@@ -855,101 +586,12 @@ public class Shib implements java.io.Serializable {
         this.debugSummary = debugSummary;
     }
 
-    private void mutateRequestForDevRandom() throws JsonSyntaxException, JsonIOException {
-        // set *something*, at least, even if it's just shortened UUIDs
-//        for (String attr : shibAttrs) {
-        // in dev we don't care if a new, random user is created each time
-//            request.setAttribute(attr, UUID.randomUUID().toString().substring(0, 8));
-//        }
-
-        String sURL = "http://api.randomuser.me";
-        URL url = null;
-        try {
-            url = new URL(sURL);
-        } catch (MalformedURLException ex) {
-            Logger.getLogger(Shib.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        HttpURLConnection randomUserRequest = null;
-        try {
-            randomUserRequest = (HttpURLConnection) url.openConnection();
-        } catch (IOException ex) {
-            Logger.getLogger(Shib.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        try {
-            randomUserRequest.connect();
-        } catch (IOException ex) {
-            Logger.getLogger(Shib.class.getName()).log(Level.SEVERE, null, ex);
-        }
-
-        JsonParser jp = new JsonParser(); //from gson
-        JsonElement root = null;
-        try {
-            root = jp.parse(new InputStreamReader((InputStream) randomUserRequest.getContent())); //convert the input stream to a json element
-        } catch (IOException ex) {
-            Logger.getLogger(Shib.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        JsonObject rootObject = root.getAsJsonObject();
-        logger.fine(rootObject.toString());
-        JsonElement results = rootObject.get("results");
-        logger.fine(results.toString());
-        JsonElement firstResult = results.getAsJsonArray().get(0);
-        logger.fine(firstResult.toString());
-        JsonElement user = firstResult.getAsJsonObject().get("user");
-        JsonElement username = user.getAsJsonObject().get("username");
-        JsonElement email = user.getAsJsonObject().get("email");
-        JsonElement password = user.getAsJsonObject().get("password");
-        JsonElement name = user.getAsJsonObject().get("name");
-        JsonElement firstName = name.getAsJsonObject().get("first");
-        JsonElement lastName = name.getAsJsonObject().get("last");
-        /**
-         * @todo Does Harvard really send displayName? At one point they didn't.
-         * Let's simulate the non-sending of displayName here.
-         */
-//        request.setAttribute(displayNameAttribute, StringUtils.capitalise(firstName.getAsString()) + " " + StringUtils.capitalise(lastName.getAsString()));
-        request.setAttribute(lastNameAttribute, StringUtils.capitalise(lastName.getAsString()));
-        request.setAttribute(firstNameAttribute, StringUtils.capitalise(firstName.getAsString()));
-        request.setAttribute(emailAttribute, email.getAsString());
-        // random IDP
-        request.setAttribute(shibIdpAttribute, "https://idp." + password.getAsString() + ".com/idp/shibboleth");
-        /**
-         * Harvard's IdP doesn't send a username so let's test without it by
-         * commenting it out here.
-         */
-//        request.setAttribute(usernameAttribute, username.getAsString());
-        // eppn
-        request.setAttribute(uniquePersistentIdentifier, UUID.randomUUID().toString().substring(0, 8));
+    public String getRedirectPage() {
+        return redirectPage;
     }
 
-    private void mutateRequestForDevConstantTestShib1() {
-        request.setAttribute(shibIdpAttribute, "https://idp.testshib.org/idp/shibboleth");
-        // the TestShib "eppn" looks like an email address
-        request.setAttribute(uniquePersistentIdentifier, "saml@testshib.org");
-//        request.setAttribute(displayNameAttribute, "Sam El");
-        request.setAttribute(firstNameAttribute, "Samuel;Sam");
-        request.setAttribute(lastNameAttribute, "El");
-        // TestShib doesn't send "mail" attribute so let's mimic that.
-//        request.setAttribute(emailAttribute, "saml@mailinator.com");
-        request.setAttribute(usernameAttribute, "saml");
-    }
-
-    private void mutateRequestForDevConstantHarvard1() {
-        request.setAttribute(shibIdpAttribute, "https://fed.huit.harvard.edu/idp/shibboleth");
-        request.setAttribute(uniquePersistentIdentifier, "constantHarvard");
-//        request.setAttribute(displayNameAttribute, "John Harvard");
-        request.setAttribute(firstNameAttribute, "John");
-        request.setAttribute(lastNameAttribute, "Harvard");
-        request.setAttribute(emailAttribute, "jharvard@mailinator.com");
-        request.setAttribute(usernameAttribute, "jharvard");
-    }
-
-    private void mutateRequestForDevConstantHarvard2() {
-        request.setAttribute(shibIdpAttribute, "https://fed.huit.harvard.edu/idp/shibboleth");
-        request.setAttribute(uniquePersistentIdentifier, "constantHarvard2");
-//        request.setAttribute(displayNameAttribute, "Grace Hopper");
-        request.setAttribute(firstNameAttribute, "Grace");
-        request.setAttribute(lastNameAttribute, "Hopper");
-        request.setAttribute(emailAttribute, "ghopper@mailinator.com");
-        request.setAttribute(usernameAttribute, "ghopper");
+    public void setRedirectPage(String redirectPage) {
+        this.redirectPage = redirectPage;
     }
 
 }

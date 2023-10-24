@@ -1,30 +1,39 @@
 package edu.harvard.iq.dataverse;
 
+import edu.harvard.iq.dataverse.harvest.client.HarvestingClient;
 import edu.harvard.iq.dataverse.authorization.DataverseRole;
 import edu.harvard.iq.dataverse.search.savedsearch.SavedSearch;
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import edu.harvard.iq.dataverse.util.SystemConfig;
+
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.FetchType;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.ManyToMany;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.OneToMany;
-import javax.persistence.OneToOne;
-import javax.persistence.OrderBy;
-import javax.persistence.Transient;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Pattern;
-import javax.validation.constraints.Size;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.ManyToMany;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OneToOne;
+import jakarta.persistence.OrderBy;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+
 import org.hibernate.validator.constraints.NotBlank;
 import org.hibernate.validator.constraints.NotEmpty;
 
@@ -34,39 +43,61 @@ import org.hibernate.validator.constraints.NotEmpty;
  * @author mbarsinai
  */
 @NamedQueries({
-    @NamedQuery(name = "Dataverse.ownedObjectsById", query = "SELECT COUNT(obj) FROM DvObject obj WHERE obj.owner.id=:id")
+    @NamedQuery(name = "Dataverse.findIdStale",query = "SELECT d.id FROM Dataverse d WHERE d.indexTime is NULL OR d.indexTime < d.modificationTime"),
+    @NamedQuery(name = "Dataverse.findIdStalePermission",query = "SELECT d.id FROM Dataverse d WHERE d.permissionIndexTime is NULL OR d.permissionIndexTime < d.permissionModificationTime"),
+    @NamedQuery(name = "Dataverse.ownedObjectsById", query = "SELECT COUNT(obj) FROM DvObject obj WHERE obj.owner.id=:id"),
+    @NamedQuery(name = "Dataverse.findAll", query = "SELECT d FROM Dataverse d order by d.name"),
+    @NamedQuery(name = "Dataverse.findRoot", query = "SELECT d FROM Dataverse d where d.owner.id=null"),
+    @NamedQuery(name = "Dataverse.findByAlias", query="SELECT dv FROM Dataverse dv WHERE LOWER(dv.alias)=:alias"),
+    @NamedQuery(name = "Dataverse.findByOwnerId", query="select object(o) from Dataverse as o where o.owner.id =:ownerId order by o.name"),
+    @NamedQuery(name = "Dataverse.findByCreatorId", query="select object(o) from Dataverse as o where o.creator.id =:creatorId order by o.name"),
+    @NamedQuery(name = "Dataverse.findByReleaseUserId", query="select object(o) from Dataverse as o where o.releaseUser.id =:releaseUserId order by o.name"),
+    @NamedQuery(name = "Dataverse.filterByAlias", query="SELECT dv FROM Dataverse dv WHERE LOWER(dv.alias) LIKE :alias order by dv.alias"),
+    @NamedQuery(name = "Dataverse.filterByAliasNameAffiliation", query="SELECT dv FROM Dataverse dv WHERE (LOWER(dv.alias) LIKE :alias) OR (LOWER(dv.name) LIKE :name) OR (LOWER(dv.affiliation) LIKE :affiliation) order by dv.alias"),
+    @NamedQuery(name = "Dataverse.filterByName", query="SELECT dv FROM Dataverse dv WHERE LOWER(dv.name) LIKE :name  order by dv.alias")
 })
 @Entity
+@Table(indexes = {@Index(columnList="defaultcontributorrole_id")
+		, @Index(columnList="defaulttemplate_id")
+		, @Index(columnList="alias")
+		, @Index(columnList="affiliation")
+		, @Index(columnList="dataversetype")
+		, @Index(columnList="facetroot")
+		, @Index(columnList="guestbookroot")
+		, @Index(columnList="metadatablockroot")
+		, @Index(columnList="templateroot")
+		, @Index(columnList="permissionroot")
+		, @Index(columnList="themeroot")})
 public class Dataverse extends DvObjectContainer {
 
     public enum DataverseType {
-        RESEARCHERS, RESEARCH_PROJECTS, JOURNALS, ORGANIZATIONS_INSTITUTIONS, TEACHING_COURSES, UNCATEGORIZED
+        RESEARCHERS, RESEARCH_PROJECTS, JOURNALS, ORGANIZATIONS_INSTITUTIONS, TEACHING_COURSES, UNCATEGORIZED, LABORATORY, RESEARCH_GROUP, DEPARTMENT
     };
     
     private static final long serialVersionUID = 1L;
 
-    @NotBlank(message = "Please enter a name.")
+    @NotBlank(message = "{dataverse.name}")
     @Column( nullable = false )
     private String name;
 
     /**
      * @todo add @Column(nullable = false) for the database to enforce non-null
      */
-    @NotBlank(message = "Please enter an alias.")
+    @NotBlank(message = "{dataverse.alias}")
     @Column(nullable = false, unique=true)
-    @Size(max = 60, message = "Alias must be at most 60 characters.")
-    @Pattern.List({@Pattern(regexp = "[a-zA-Z0-9\\_\\-]*", message = "Found an illegal character(s). Valid characters are a-Z, 0-9, '_', and '-'."), 
-        @Pattern(regexp=".*\\D.*", message="Alias should not be a number")})
+    @Size(max = 60, message = "{dataverse.aliasLength}")
+    @Pattern.List({@Pattern(regexp = "[a-zA-Z0-9\\_\\-]*", message = "{dataverse.nameIllegalCharacters}"),
+        @Pattern(regexp=".*\\D.*", message="{dataverse.aliasNotnumber}")})
     private String alias;
 
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
     @Enumerated(EnumType.STRING)
-    @NotNull(message = "Please select a category for your dataverse.")
+    @NotNull(message = "{dataverse.category}")
     @Column( nullable = false )
     private DataverseType dataverseType;
-    
+       
     /**
      * When {@code true}, users are not granted permissions the got for parent
      * dataverses.
@@ -82,41 +113,49 @@ public class Dataverse extends DvObjectContainer {
         this.dataverseType = dataverseType;
     }
 
-    @Transient
-    private final String uncategorizedString = "Uncategorized";
-
-    /**
-     * @todo Don't hard code these as English.
-     */
     public String getFriendlyCategoryName(){
-       switch (this.dataverseType) {
-            case RESEARCHERS:
-                return "Researcher";
-            case RESEARCH_PROJECTS:
-                return "Research Project";
-            case JOURNALS:
-                return "Journal";            
-            case ORGANIZATIONS_INSTITUTIONS:
-                return "Organization or Institution";            
-            case TEACHING_COURSES:
-                return "Teaching Course";            
-            case UNCATEGORIZED:
-                return uncategorizedString;
-            default:
-                return "";
-        }    
+        String key = getFriendlyCategoryKey();
+        return BundleUtil.getStringFromBundle(key);
     }
 
+    public String getFriendlyCategoryKey(){
+        switch (this.dataverseType) {
+            case RESEARCHERS:
+                return  ("dataverse.type.selectTab.researchers");
+            case RESEARCH_PROJECTS:
+                return  ("dataverse.type.selectTab.researchProjects" );
+            case JOURNALS:
+                return  ("dataverse.type.selectTab.journals" );
+            case ORGANIZATIONS_INSTITUTIONS:
+                return  ("dataverse.type.selectTab.organizationsAndInsitutions" );
+            case TEACHING_COURSES:
+                return  ("dataverse.type.selectTab.teachingCourses" );
+            case LABORATORY:
+                return  ("dataverse.type.selectTab.laboratory");
+            case RESEARCH_GROUP:
+                return  ("dataverse.type.selectTab.researchGroup" );
+            case DEPARTMENT:
+                return  ("dataverse.type.selectTab.department" );
+            case UNCATEGORIZED:
+                return ("dataverse.type.selectTab.uncategorized");
+            default:
+                return "";
+        }
+    }
+
+
     public String getIndexableCategoryName() {
-        String friendlyName = getFriendlyCategoryName();
-        if (friendlyName.equals(uncategorizedString)) {
+        String key = getFriendlyCategoryKey();
+        if (key.equals("dataverse.type.selectTab.uncategorized")) {
             return null;
         } else {
-            return friendlyName;
+            return BundleUtil.getStringFromDefaultBundle(key);
         }
     }
 
     private String affiliation;
+    
+    ///private String storageDriver=null;
 
 	// Note: We can't have "Remove" here, as there are role assignments that refer
     //       to this role. So, adding it would mean violating a forign key contstraint.
@@ -126,7 +165,7 @@ public class Dataverse extends DvObjectContainer {
     private Set<DataverseRole> roles;
     
     @ManyToOne
-    @JoinColumn(nullable = false)
+    @JoinColumn(nullable = true)
     private DataverseRole defaultContributorRole;
 
     public DataverseRole getDefaultContributorRole() {
@@ -139,7 +178,8 @@ public class Dataverse extends DvObjectContainer {
    
     private boolean metadataBlockRoot;
     private boolean facetRoot;
-    private boolean themeRoot;
+    // By default, themeRoot should be true, as new dataverses should start with the default theme
+    private boolean themeRoot = true;
     private boolean templateRoot;    
 
     
@@ -149,14 +189,20 @@ public class Dataverse extends DvObjectContainer {
     @OneToMany(mappedBy = "dataverse",cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST}, orphanRemoval=true)
     @OrderBy("displayOrder")
     @NotEmpty(message="At least one contact is required.")
-    private List<DataverseContact> dataverseContacts = new ArrayList();
+    private List<DataverseContact> dataverseContacts = new ArrayList<>();
     
     @ManyToMany(cascade = {CascadeType.MERGE})
-    private List<MetadataBlock> metadataBlocks = new ArrayList();
+    private List<MetadataBlock> metadataBlocks = new ArrayList<>();
 
-    @OneToMany(mappedBy = "dataverse")
+    @OneToMany(mappedBy = "dataverse",cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST}, orphanRemoval=true)
     @OrderBy("displayOrder")
-    private List<DataverseFacet> dataverseFacets = new ArrayList();
+    private List<DataverseFacet> dataverseFacets = new ArrayList<>();
+    
+    @ManyToMany(cascade = {CascadeType.MERGE})
+    @JoinTable(name = "dataverse_citationDatasetFieldTypes",
+    joinColumns = @JoinColumn(name = "dataverse_id"),
+    inverseJoinColumns = @JoinColumn(name = "citationdatasetfieldtype_id"))
+    private List<DatasetFieldType> citationDatasetFieldTypes = new ArrayList<>();
     
     @ManyToMany
     @JoinTable(name = "dataversesubjects",
@@ -164,8 +210,61 @@ public class Dataverse extends DvObjectContainer {
     inverseJoinColumns = @JoinColumn(name = "controlledvocabularyvalue_id"))
     private Set<ControlledVocabularyValue> dataverseSubjects;
     
+    @OneToMany(mappedBy="dataverse", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    private List<DataverseFeaturedDataverse> dataverseFeaturedDataverses;
+
+    public List<DataverseFeaturedDataverse> getDataverseFeaturedDataverses() {
+        return dataverseFeaturedDataverses;
+    }
+
+    public void setDataverseFeaturedDataverses(List<DataverseFeaturedDataverse> dataverseFeaturedDataverses) {
+        this.dataverseFeaturedDataverses = dataverseFeaturedDataverses;
+    }
     
+    @OneToMany(mappedBy="featuredDataverse", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    private List<DataverseFeaturedDataverse> dataverseFeaturingDataverses;
+
+    public List<DataverseFeaturedDataverse> getDataverseFeaturingDataverses() {
+        return dataverseFeaturingDataverses;
+    }
+
+    public void setDataverseFeaturingDataverses(List<DataverseFeaturedDataverse> dataverseFeaturingDataverses) {
+        this.dataverseFeaturingDataverses = dataverseFeaturingDataverses;
+    }
     
+    @OneToMany(mappedBy="dataverse", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    private List<DataverseLinkingDataverse> dataverseLinkingDataverses;
+
+    public List<DataverseLinkingDataverse> getDataverseLinkingDataverses() {
+        return dataverseLinkingDataverses;
+    }
+
+    public void setDataverseLinkingDataverses(List<DataverseLinkingDataverse> dataverseLinkingDataverses) {
+        this.dataverseLinkingDataverses = dataverseLinkingDataverses;
+    }
+       
+    @OneToMany(mappedBy="linkingDataverse", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    private List<DataverseLinkingDataverse> dataverseLinkedDataverses;
+
+    public List<DataverseLinkingDataverse> getDataverseLinkedDataverses() {
+        return dataverseLinkedDataverses;
+    }
+
+    public void setDataverseLinkedDataverses(List<DataverseLinkingDataverse> dataverseLinkedDataverses) {
+        this.dataverseLinkedDataverses = dataverseLinkedDataverses;
+    }
+    
+    @OneToMany(mappedBy="linkingDataverse", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
+    private List<DatasetLinkingDataverse> datasetLinkingDataverses;
+
+    public List<DatasetLinkingDataverse> getDatasetLinkingDataverses() {
+        return datasetLinkingDataverses;
+    }
+
+    public void setDatasetLinkingDataverses(List<DatasetLinkingDataverse> datasetLinkingDataverses) {
+        this.datasetLinkingDataverses = datasetLinkingDataverses;
+    }
+        
     public Set<ControlledVocabularyValue> getDataverseSubjects() {
         return dataverseSubjects;
     }
@@ -176,13 +275,13 @@ public class Dataverse extends DvObjectContainer {
 
     
     @OneToMany(mappedBy = "dataverse")
-    private List<DataverseFieldTypeInputLevel> dataverseFieldTypeInputLevels = new ArrayList();
+    private List<DataverseFieldTypeInputLevel> dataverseFieldTypeInputLevels = new ArrayList<>();
     
     @ManyToOne
     @JoinColumn(nullable = true)
     private Template defaultTemplate;  
     
-    @OneToMany(mappedBy = "definitionPoint")
+    @OneToMany(mappedBy = "definitionPoint", cascade={CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
     private List<SavedSearch> savedSearches;
 
     public List<SavedSearch> getSavedSearches() {
@@ -196,7 +295,7 @@ public class Dataverse extends DvObjectContainer {
     @OneToMany(mappedBy="dataverse", cascade = {CascadeType.MERGE, CascadeType.REMOVE})
     private List<Template> templates; 
     
-    @OneToMany(mappedBy="dataverse", cascade = {CascadeType.MERGE})
+    @OneToMany(mappedBy="dataverse", cascade = {CascadeType.MERGE, CascadeType.REMOVE})
     private List<Guestbook> guestbooks;
         
     public List<Guestbook> getGuestbooks() {
@@ -207,24 +306,49 @@ public class Dataverse extends DvObjectContainer {
         this.guestbooks = guestbooks;
     } 
     
-    @OneToOne (mappedBy="dataverse", cascade={CascadeType.PERSIST, CascadeType.REMOVE})
-    private HarvestingDataverseConfig harvestingDataverseConfig;
+    
+    @OneToMany (mappedBy="dataverse", cascade={CascadeType.MERGE, CascadeType.REMOVE})
+    private List<HarvestingClient> harvestingClientConfigs;
 
-    public HarvestingDataverseConfig getHarvestingDataverseConfig() {
-        return this.harvestingDataverseConfig;
+    public List<HarvestingClient> getHarvestingClientConfigs() {
+        return this.harvestingClientConfigs;
     }
 
-    public void setHarvestingDataverseConfig(HarvestingDataverseConfig harvestingDataverseConfig) {
-        this.harvestingDataverseConfig = harvestingDataverseConfig;
+    public void setHarvestingClientConfigs(List<HarvestingClient> harvestingClientConfigs) {
+        this.harvestingClientConfigs = harvestingClientConfigs;
     }
-
+    /*
     public boolean isHarvested() {
-        return harvestingDataverseConfig != null; 
+        return harvestingClient != null; 
     }
-    
-    
+    */
+    private boolean metadataBlockFacetRoot;
+
+    public boolean isMetadataBlockFacetRoot() {
+        return metadataBlockFacetRoot;
+    }
+
+    public void setMetadataBlockFacetRoot(boolean metadataBlockFacetRoot) {
+        this.metadataBlockFacetRoot = metadataBlockFacetRoot;
+    }
+
+    @OneToMany(mappedBy = "dataverse",cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST }, orphanRemoval=true)
+    private List<DataverseMetadataBlockFacet> metadataBlockFacets = new ArrayList<>();
+
+    public List<DataverseMetadataBlockFacet> getMetadataBlockFacets() {
+        if (isMetadataBlockFacetRoot() || getOwner() == null) {
+            return metadataBlockFacets;
+        } else {
+            return getOwner().getMetadataBlockFacets();
+        }
+    }
+
+    public void setMetadataBlockFacets(List<DataverseMetadataBlockFacet> metadataBlockFacets) {
+        this.metadataBlockFacets = metadataBlockFacets;
+    }
+
     public List<Guestbook> getParentGuestbooks() {
-        List<Guestbook> retList = new ArrayList();
+        List<Guestbook> retList = new ArrayList<>();
         Dataverse testDV = this;
         while (testDV.getOwner() != null){   
            retList.addAll(testDV.getOwner().getGuestbooks());          
@@ -238,9 +362,9 @@ public class Dataverse extends DvObjectContainer {
     
     public List<Guestbook> getAvailableGuestbooks() {
         //get all guestbooks
-        List<Guestbook> retList = new ArrayList();
+        List<Guestbook> retList = new ArrayList<>();
         Dataverse testDV = this;
-        List<Guestbook> allGbs = new ArrayList();
+        List<Guestbook> allGbs = new ArrayList<>();
         if (!this.guestbookRoot){
                     while (testDV.getOwner() != null){   
           
@@ -300,7 +424,7 @@ public class Dataverse extends DvObjectContainer {
     }
 
     public List<Template> getParentTemplates() {
-        List<Template> retList = new ArrayList();
+        List<Template> retList = new ArrayList<>();
         Dataverse testDV = this;
         while (testDV.getOwner() != null){   
             
@@ -437,8 +561,10 @@ public class Dataverse extends DvObjectContainer {
         }
         return retName;
     }
+        
     
     public String getLogoOwnerId() {
+        
         if (themeRoot || getOwner()==null) {
             return this.getId().toString();
         } else {
@@ -454,6 +580,42 @@ public class Dataverse extends DvObjectContainer {
         this.metadataBlocks = metadataBlocks;
     }
 
+    public List<DatasetFieldType> getCitationDatasetFieldTypes() {
+        return citationDatasetFieldTypes;
+    }
+
+    public void setCitationDatasetFieldTypes(List<DatasetFieldType> citationDatasetFieldTypes) {
+        this.citationDatasetFieldTypes = citationDatasetFieldTypes;
+    }
+    
+    /**
+     * @Note: this setting is Nullable, with {@code null} indicating that the 
+     * desired behavior is not explicitly configured for this specific collection. 
+     * See the comment below. 
+     */
+    @Column(nullable = true)
+    private Boolean filePIDsEnabled;
+
+    /**
+     * Specifies whether the PIDs for Datafiles should be registered when publishing 
+     * datasets in this Collection, if the behavior is explicitly configured.
+     * @return {@code Boolean.TRUE} if explicitly enabled, {@code Boolean.FALSE} if explicitly disabled. 
+     * {@code null} indicates that the behavior is not explicitly defined, in which 
+     * case the behavior should follow the explicit configuration of the first 
+     * direct ancestor collection, or the instance-wide configuration, if none 
+     * present. 
+     * @Note: If present, this configuration therefore by default applies to all 
+     * the sub-collections, unless explicitly overwritten there.
+     * @author landreev
+     */
+    public Boolean getFilePIDsEnabled() {
+        return filePIDsEnabled;
+    }
+    
+    public void setFilePIDsEnabled(boolean filePIDsEnabled) {
+        this.filePIDsEnabled = filePIDsEnabled;
+    }
+    
     public List<DataverseFacet> getDataverseFacets() {
         return getDataverseFacets(false);
     }
@@ -482,8 +644,28 @@ public class Dataverse extends DvObjectContainer {
         return dataverseContacts;
     }
     
+    /**
+     * Get the email addresses of the dataverse contacts as a comma-separated
+     * concatenation.
+     * @return a comma-separated concatenation of email addresses, or the empty
+     *  string if there are no contacts.
+     * @author bencomp
+     */
     public String getContactEmails() {
-        return "";
+        if (dataverseContacts != null && !dataverseContacts.isEmpty()) {
+            StringBuilder buf = new StringBuilder();
+            Iterator<DataverseContact> it = dataverseContacts.iterator();
+            while (it.hasNext()) {
+                DataverseContact con = it.next();
+                buf.append(con.getContactEmail());
+                if (it.hasNext()) {
+                    buf.append(",");
+                }
+            }
+            return buf.toString();
+        } else {
+            return "";
+        }
     }
 
     public void setDataverseContacts(List<DataverseContact> dataverseContacts) {
@@ -549,15 +731,26 @@ public class Dataverse extends DvObjectContainer {
 
     public void addRole(DataverseRole role) {
         role.setOwner(this);
+        if ( roles == null ) {
+            roles = new HashSet<>();
+        }
         roles.add(role);
     }
-
+    
+    /**
+     * Note: to add a role, use {@link #addRole(edu.harvard.iq.dataverse.authorization.DataverseRole)},
+     * do not call this method and try to add directly to the list. 
+     * @return the roles defined in this Dataverse.
+     */
     public Set<DataverseRole> getRoles() {
+        if ( roles == null ) {
+            roles = new HashSet<>();
+        }
         return roles;
     }
-
+    
     public List<Dataverse> getOwners() {
-        List owners = new ArrayList();
+        List<Dataverse> owners = new ArrayList<>();
         if (getOwner() != null) {
             owners.addAll(getOwner().getOwners());
             owners.add(getOwner());
@@ -594,7 +787,12 @@ public class Dataverse extends DvObjectContainer {
     
     @Override
     public String getDisplayName() {
-        return getName() + " Dataverse";
+        return getName();
+    }
+    
+    @Override
+    public String getCurrentName() {
+        return getName();
     }
     
     @Override
@@ -605,5 +803,19 @@ public class Dataverse extends DvObjectContainer {
     public void setPermissionRoot(boolean permissionRoot) {
         this.permissionRoot = permissionRoot;
     }
-
+      
+    @Override
+    public boolean isAncestorOf( DvObject other ) {
+        while ( other != null ) {
+            if ( equals(other) ) {
+                return true;
+            }
+            other = other.getOwner();
+        }
+        return false;
+    }
+    
+    public String getLocalURL() {
+        return  SystemConfig.getDataverseSiteUrlStatic() + "/dataverse/" + this.getAlias();
+    }
 }

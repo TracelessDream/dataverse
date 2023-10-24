@@ -1,36 +1,42 @@
 package edu.harvard.iq.dataverse.api;
 
 import edu.harvard.iq.dataverse.Dataverse;
+import edu.harvard.iq.dataverse.api.auth.AuthRequired;
 import edu.harvard.iq.dataverse.search.SearchFields;
 import edu.harvard.iq.dataverse.DataverseServiceBean;
 import edu.harvard.iq.dataverse.DvObjectServiceBean;
-import edu.harvard.iq.dataverse.FacetCategory;
-import edu.harvard.iq.dataverse.FacetLabel;
-import edu.harvard.iq.dataverse.SolrSearchResult;
-import edu.harvard.iq.dataverse.SearchServiceBean;
-import edu.harvard.iq.dataverse.SolrQueryResponse;
+import edu.harvard.iq.dataverse.search.FacetCategory;
+import edu.harvard.iq.dataverse.search.FacetLabel;
+import edu.harvard.iq.dataverse.search.SolrSearchResult;
+import edu.harvard.iq.dataverse.search.SearchServiceBean;
+import edu.harvard.iq.dataverse.search.SolrQueryResponse;
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
 import edu.harvard.iq.dataverse.authorization.users.GuestUser;
 import edu.harvard.iq.dataverse.authorization.users.User;
 import edu.harvard.iq.dataverse.search.SearchConstants;
 import edu.harvard.iq.dataverse.search.SearchException;
+import edu.harvard.iq.dataverse.search.SearchUtil;
 import edu.harvard.iq.dataverse.search.SolrIndexServiceBean;
 import edu.harvard.iq.dataverse.search.SortBy;
 import edu.harvard.iq.dataverse.settings.SettingsServiceBean;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.json.Json;
-import javax.json.JsonArrayBuilder;
-import javax.json.JsonObjectBuilder;
-import javax.ws.rs.GET;
-import javax.ws.rs.Path;
-import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.Response;
-import org.apache.commons.lang.StringUtils;
+import jakarta.ejb.EJB;
+import jakarta.json.Json;
+import jakarta.json.JsonArrayBuilder;
+import jakarta.json.JsonObjectBuilder;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.Response;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * User-facing documentation:
@@ -51,11 +57,12 @@ public class Search extends AbstractApiBean {
     SolrIndexServiceBean SolrIndexService;
 
     @GET
+    @AuthRequired
     public Response search(
+            @Context ContainerRequestContext crc,
             @QueryParam("q") String query,
-            @QueryParam("key") String key,
             @QueryParam("type") final List<String> types,
-            @QueryParam("subtree") String subtreeRequested,
+            @QueryParam("subtree") final List<String> subtrees,
             @QueryParam("sort") String sortField,
             @QueryParam("order") String sortOrder,
             @QueryParam("per_page") final int numResultsPerPageRequested,
@@ -64,12 +71,18 @@ public class Search extends AbstractApiBean {
             @QueryParam("show_facets") boolean showFacets,
             @QueryParam("fq") final List<String> filterQueries,
             @QueryParam("show_entity_ids") boolean showEntityIds,
-            @QueryParam("show_api_urls") boolean showApiUrls
+            @QueryParam("show_api_urls") boolean showApiUrls,
+            @QueryParam("show_my_data") boolean showMyData,
+            @QueryParam("query_entities") boolean queryEntities,
+            @QueryParam("metadata_fields") List<String> metadataFields,
+            @QueryParam("geo_point") String geoPointRequested,
+            @QueryParam("geo_radius") String geoRadiusRequested,
+            @Context HttpServletResponse response
     ) {
 
         User user;
         try {
-            user = getUser(key);
+            user = getUser(crc);
         } catch (WrappedResponse ex) {
             return ex.getResponse();
         }
@@ -79,42 +92,72 @@ public class Search extends AbstractApiBean {
             // sanity checking on user-supplied arguments
             SortBy sortBy;
             int numResultsPerPage;
-            Dataverse subtree;
+            String geoPoint;
+            String geoRadius;
+            List<Dataverse> dataverseSubtrees = new ArrayList<>();
+
             try {
                 if (!types.isEmpty()) {
                     filterQueries.add(getFilterQueryFromTypes(types));
-                }
-                sortBy = getSortBy(sortField, sortOrder);
-                numResultsPerPage = getNumberOfResultsPerPage(numResultsPerPageRequested);
-                subtree = getSubtree(subtreeRequested);
-                if (!subtree.equals(dataverseService.findRootDataverse())) {
-                    String dataversePath = dataverseService.determineDataversePath(subtree);
-                    String filterDownToSubtree = SearchFields.SUBTREE + ":\"" + dataversePath + "\"";
+                } else {
                     /**
-                     * @todo Should filterDownToSubtree logic be centralized in
-                     * SearchServiceBean?
+                     * Added to prevent a NullPointerException for superusers
+                     * (who don't use our permission JOIN) when
+                     * SearchServiceBean tries to get SearchFields.TYPE. The GUI
+                     * always seems to add SearchFields.TYPE, even for superusers.
                      */
-                    filterQueries.add(filterDownToSubtree);
+                    filterQueries.add(SearchFields.TYPE + ":(" + SearchConstants.DATAVERSES + " OR " + SearchConstants.DATASETS + " OR " + SearchConstants.FILES + ")");
                 }
+                sortBy = SearchUtil.getSortBy(sortField, sortOrder);
+                numResultsPerPage = getNumberOfResultsPerPage(numResultsPerPageRequested);
+                
+                 // we have to add "" (root) otherwise there is no permissions check
+                if(subtrees.isEmpty()) {
+                    dataverseSubtrees.add(getSubtree(""));
+                }
+                else {
+                    for(String subtree : subtrees) {
+                        dataverseSubtrees.add(getSubtree(subtree));
+                    }
+                }
+                filterQueries.add(getFilterQueryFromSubtrees(dataverseSubtrees));
+                
+                if(filterQueries.isEmpty()) { //Extra sanity check just in case someone else touches this
+                    throw new IOException("Filter is empty, which should never happen, as this allows unfettered searching of our index");
+                }
+                
+                geoPoint = getGeoPoint(geoPointRequested);
+                geoRadius = getGeoRadius(geoRadiusRequested);
+
+                if (geoPoint != null && geoRadius == null) {
+                    return error(Response.Status.BAD_REQUEST, "If you supply geo_point you must also supply geo_radius.");
+                }
+
+                if (geoRadius != null && geoPoint == null) {
+                    return error(Response.Status.BAD_REQUEST, "If you supply geo_radius you must also supply geo_point.");
+                }
+
             } catch (Exception ex) {
-                return errorResponse(Response.Status.BAD_REQUEST, ex.getLocalizedMessage());
+                return error(Response.Status.BAD_REQUEST, ex.getLocalizedMessage());
             }
 
             // users can't change these (yet anyway)
-            boolean dataRelatedToMe = getDataRelatedToMe();
-
+            boolean dataRelatedToMe = showMyData; //getDataRelatedToMe();
+            
             SolrQueryResponse solrQueryResponse;
             try {
-                solrQueryResponse = searchService.search(
-                        user,
-                        subtree,
+                solrQueryResponse = searchService.search(createDataverseRequest(user),
+                        dataverseSubtrees,
                         query,
                         filterQueries,
                         sortBy.getField(),
                         sortBy.getOrder(),
                         paginationStart,
                         dataRelatedToMe,
-                        numResultsPerPage
+                        numResultsPerPage,
+                        true, //SEK get query entities always for search API additional Dataset Information 6300  12/6/2019
+                        geoPoint,
+                        geoRadius
                 );
             } catch (SearchException ex) {
                 Throwable cause = ex;
@@ -128,13 +171,13 @@ public class Search extends AbstractApiBean {
                 }
                 String message = "Exception running search for [" + query + "] with filterQueries " + filterQueries + " and paginationStart [" + paginationStart + "]: " + sb.toString();
                 logger.info(message);
-                return errorResponse(Response.Status.INTERNAL_SERVER_ERROR, message);
+                return error(Response.Status.INTERNAL_SERVER_ERROR, message);
             }
 
             JsonArrayBuilder itemsArrayBuilder = Json.createArrayBuilder();
             List<SolrSearchResult> solrSearchResults = solrQueryResponse.getSolrSearchResults();
             for (SolrSearchResult solrSearchResult : solrSearchResults) {
-                itemsArrayBuilder.add(solrSearchResult.toJsonObject(showRelevance, showEntityIds, showApiUrls));
+                itemsArrayBuilder.add(solrSearchResult.toJsonObject(showRelevance, showEntityIds, showApiUrls, metadataFields));
             }
 
             JsonObjectBuilder spelling_alternatives = Json.createObjectBuilder();
@@ -179,38 +222,34 @@ public class Search extends AbstractApiBean {
                  * @todo You get here if you pass only ":" as a query, for
                  * example. Should we return more or better information?
                  */
-                return errorResponse(Response.Status.BAD_REQUEST, solrQueryResponse.getError());
+                return error(Response.Status.BAD_REQUEST, solrQueryResponse.getError());
             }
-            return okResponse(value);
+            return ok(value);
         } else {
-            return errorResponse(Response.Status.BAD_REQUEST, "q parameter is missing");
+            return error(Response.Status.BAD_REQUEST, "q parameter is missing");
         }
     }
 
-    private User getUser(String key) throws WrappedResponse {
-        /**
-         * @todo support searching as non-guest:
-         * https://github.com/IQSS/dataverse/issues/1299
-         *
-         * Note that superusers can't currently use the Search API because they
-         * see permission documents (all Solr documents, really) and we get a
-         * NPE when trying to determine the DvObject type if their query matches
-         * a permission document.
-         *
-         * @todo Check back on https://github.com/IQSS/dataverse/issues/1838 for
-         * when/if the Search API is opened up to not require a key.
-         */
-        AuthenticatedUser authenticatedUser = findUserOrDie(key);
-        if (nonPublicSearchAllowed()) {
-            return authenticatedUser;
-        } else {
-            return new GuestUser();
+    private User getUser(ContainerRequestContext crc) throws WrappedResponse {
+        User userToExecuteSearchAs = GuestUser.get();
+        try {
+            AuthenticatedUser authenticatedUser = getRequestAuthenticatedUserOrDie(crc);
+            if (authenticatedUser != null) {
+                userToExecuteSearchAs = authenticatedUser;
+            }
+        } catch (WrappedResponse ex) {
+            if (!tokenLessSearchAllowed()) {
+                throw ex;
+            }
         }
+        return userToExecuteSearchAs;
     }
 
-    public boolean nonPublicSearchAllowed() {
-        boolean safeDefaultIfKeyNotFound = false;
-        return settingsSvc.isTrueForKey(SettingsServiceBean.Key.SearchApiNonPublicAllowed, safeDefaultIfKeyNotFound);
+    public boolean tokenLessSearchAllowed() {
+        boolean outOfBoxBehavior = false;
+        boolean tokenLessSearchAllowed = settingsSvc.isFalseForKey(SettingsServiceBean.Key.SearchApiRequiresToken, outOfBoxBehavior);
+        logger.fine("tokenLessSearchAllowed: " + tokenLessSearchAllowed);
+        return tokenLessSearchAllowed;
     }
 
     private boolean getDataRelatedToMe() {
@@ -226,7 +265,7 @@ public class Search extends AbstractApiBean {
         /**
          * @todo should maxLimit be configurable?
          */
-        int maxLimit = 1000;
+        int maxLimit = 1000; 
         if (numResultsPerPage == 0) {
             /**
              * @todo should defaultLimit be configurable?
@@ -256,44 +295,6 @@ public class Search extends AbstractApiBean {
         }
     }
 
-    private SortBy getSortBy(String sortField, String sortOrder) throws Exception {
-
-        if (StringUtils.isBlank(sortField)) {
-            sortField = SearchFields.RELEVANCE;
-        } else if (sortField.equals("name")) {
-            // "name" sounds better than "name_sort" so we convert it here so users don't have to pass in "name_sort"
-            sortField = SearchFields.NAME_SORT;
-        } else if (sortField.equals("date")) {
-            // "date" sounds better than "release_or_create_date_dt"
-            sortField = SearchFields.RELEASE_OR_CREATE_DATE;
-        }
-
-        if (StringUtils.isBlank(sortOrder)) {
-            if (StringUtils.isNotBlank(sortField)) {
-                // default sorting per field if not specified
-                if (sortField.equals(SearchFields.RELEVANCE)) {
-                    sortOrder = SortBy.DESCENDING;
-                } else if (sortField.equals(SearchFields.NAME_SORT)) {
-                    sortOrder = SortBy.ASCENDING;
-                } else if (sortField.equals(SearchFields.RELEASE_OR_CREATE_DATE)) {
-                    sortOrder = SortBy.DESCENDING;
-                } else {
-                    // asc for alphabetical by default despite GitHub using desc by default:
-                    // "The sort order if sort parameter is provided. One of asc or desc. Default: desc"
-                    // http://developer.github.com/v3/search/
-                    sortOrder = SortBy.ASCENDING;
-                }
-            }
-        }
-
-        List<String> allowedSortOrderValues = SortBy.allowedOrderStrings();
-        if (!allowedSortOrderValues.contains(sortOrder)) {
-            throw new Exception("The 'order' parameter was '" + sortOrder + "' but expected one of " + allowedSortOrderValues + ". (The 'sort' parameter was/became '" + sortField + "'.)");
-        }
-
-        return new SortBy(sortField, sortOrder);
-    }
-
     private String getFilterQueryFromTypes(List<String> types) throws Exception {
         String filterQuery = null;
         List<String> typeRequested = new ArrayList<>();
@@ -314,6 +315,37 @@ public class Search extends AbstractApiBean {
         filterQuery = SearchFields.TYPE + ":(" + StringUtils.join(typeRequested, " OR ") + ")";
         return filterQuery;
     }
+    
+    //Only called when there is content
+    /**
+    * @todo (old) Should filterDownToSubtree logic be centralized in
+    * SearchServiceBean?
+    */
+    private String getFilterQueryFromSubtrees(List<Dataverse> subtrees) throws Exception {
+        String subtreesFilter = "";
+        
+        for(Dataverse dv : subtrees) {
+            if (!dv.equals(dataverseService.findRootDataverse())) {
+                String dataversePath = dataverseService.determineDataversePath(dv);
+
+                subtreesFilter += "\"" + dataversePath + "\" OR ";
+
+            }
+        }
+        try{
+            subtreesFilter = subtreesFilter.substring(0, subtreesFilter.lastIndexOf("OR"));
+        } catch (StringIndexOutOfBoundsException ex) {
+            //This case should only happen the root subtree is searched 
+            //and there are no ORs in the string
+            subtreesFilter = "";
+        }
+        
+        if(!subtreesFilter.equals("")) {
+            subtreesFilter =  SearchFields.SUBTREE + ":(" + subtreesFilter + ")";
+        }
+        
+        return subtreesFilter;
+    }
 
     private Dataverse getSubtree(String alias) throws Exception {
         if (StringUtils.isBlank(alias)) {
@@ -326,6 +358,14 @@ public class Search extends AbstractApiBean {
                 throw new Exception("Could not find dataverse with alias " + alias);
             }
         }
+    }
+
+    private String getGeoPoint(String geoPointRequested) {
+        return SearchUtil.getGeoPoint(geoPointRequested);
+    }
+
+    private String getGeoRadius(String geoRadiusRequested) {
+        return SearchUtil.getGeoRadius(geoRadiusRequested);
     }
 
 }

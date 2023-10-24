@@ -2,7 +2,7 @@
 #
 
 # You can set these variables from the command line.
-SPHINXOPTS    =
+SPHINXOPTS    = -W
 SPHINXBUILD   = sphinx-build
 PAPER         =
 BUILDDIR      = build
@@ -55,7 +55,7 @@ htmldeploy: html $(GUIDESDIR)
 	@echo
 	@cp -Rf build/html/* $(GUIDESDIR)
 	@echo "HTML documentation deployed to $(GUIDESDIR)."
-	@echo "It should now be available at http://<YOURHOST>:<YOURPORT>/guides."
+	@echo "It should now be available at http://<YOURHOST>:<YOURPORT>/guides/index.html"
 
 $(GUIDESDIR):
 	@mkdir -p $(GUIDESDIR) 

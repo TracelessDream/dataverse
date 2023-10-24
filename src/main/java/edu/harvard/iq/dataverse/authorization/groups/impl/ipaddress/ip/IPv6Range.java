@@ -1,16 +1,19 @@
 package edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip;
 
 import java.io.Serializable;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.Id;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  * 
  * @author michael
  */
+@Table(indexes = {@Index(columnList="owner_id")})
 @NamedQueries({
     @NamedQuery( name="IPv6Range.findGroupsContainingABCD",
                 query="SELECT DISTINCT r.owner FROM IPv6Range r "
@@ -45,6 +48,7 @@ public class IPv6Range extends IpAddressRange implements Serializable {
     
     @Override
     public Boolean contains(IpAddress anAddress) {
+        if ( anAddress == null ) return null;
         if ( anAddress instanceof IPv6Address ) {
             IPv6Address adr = (IPv6Address) anAddress;
             return getBottom().compareTo(adr)<=0 && getTop().compareTo(adr)>=0;

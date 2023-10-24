@@ -20,28 +20,96 @@
 
 package edu.harvard.iq.dataverse.util;
 
+
 import edu.harvard.iq.dataverse.DataFile;
+import edu.harvard.iq.dataverse.DataFile.ChecksumType;
+import edu.harvard.iq.dataverse.DataFileServiceBean;
+import edu.harvard.iq.dataverse.Dataset;
+import edu.harvard.iq.dataverse.DatasetVersion;
+import edu.harvard.iq.dataverse.Embargo;
+import edu.harvard.iq.dataverse.FileMetadata;
+import edu.harvard.iq.dataverse.TermsOfUseAndAccess;
+import edu.harvard.iq.dataverse.dataaccess.DataAccess;
+import edu.harvard.iq.dataverse.dataaccess.ImageThumbConverter;
+import edu.harvard.iq.dataverse.dataaccess.S3AccessIO;
+import edu.harvard.iq.dataverse.dataset.DatasetThumbnail;
+import edu.harvard.iq.dataverse.dataset.DatasetUtil;
+import edu.harvard.iq.dataverse.datasetutility.FileExceedsMaxSizeException;
+
+import static edu.harvard.iq.dataverse.api.ApiConstants.DS_VERSION_DRAFT;
+import static edu.harvard.iq.dataverse.datasetutility.FileSizeChecker.bytesToHumanReadable;
+import edu.harvard.iq.dataverse.ingest.IngestReport;
+import edu.harvard.iq.dataverse.ingest.IngestServiceBean;
+import edu.harvard.iq.dataverse.ingest.IngestServiceShapefileHelper;
 import edu.harvard.iq.dataverse.ingest.IngestableDataChecker;
+import edu.harvard.iq.dataverse.license.License;
+import edu.harvard.iq.dataverse.settings.ConfigCheckService;
+import edu.harvard.iq.dataverse.settings.JvmSettings;
+import edu.harvard.iq.dataverse.util.file.BagItFileHandler;
+import edu.harvard.iq.dataverse.util.file.CreateDataFileResult;
+import edu.harvard.iq.dataverse.util.file.BagItFileHandlerFactory;
+import edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatDoc;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.HTML_H1;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.HTML_TABLE_HDR;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatTitle;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatTable;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatTableCell;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatLink;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatTableCellAlignRight;
+import static edu.harvard.iq.dataverse.util.xml.html.HtmlFormatUtil.formatTableRow;
+
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ResourceBundle;
-import java.util.MissingResourceException;
-import java.nio.channels.FileChannel;
-import java.nio.channels.WritableByteChannel;
-import java.util.HashMap;
+import java.io.OutputStream;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.Timestamp;
+import java.text.MessageFormat;
+import java.text.SimpleDateFormat;
+import java.time.LocalDate;
 import java.util.Map;
+import java.util.MissingResourceException;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.activation.MimetypesFileTypeMap;
-import javax.ejb.EJBException;
+import jakarta.activation.MimetypesFileTypeMap;
+import jakarta.ejb.EJBException;
+import jakarta.enterprise.inject.spi.CDI;
+import jakarta.json.JsonArray;
+import jakarta.json.JsonObject;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
+
+
 import java.util.zip.GZIPInputStream;
+import org.apache.commons.io.FilenameUtils;
+
+import edu.harvard.iq.dataverse.dataaccess.DataAccessOption;
+import edu.harvard.iq.dataverse.dataaccess.StorageIO;
+import edu.harvard.iq.dataverse.util.file.FileExceedsStorageQuotaException;
+import java.util.Arrays;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
+import ucar.nc2.NetcdfFile;
+import ucar.nc2.NetcdfFiles;
 
 /**
  * a 4.0 implementation of the DVN FileUtil;
@@ -55,8 +123,8 @@ public class FileUtil implements java.io.Serializable  {
     
     private static final String[] TABULAR_DATA_FORMAT_SET = {"POR", "SAV", "DTA", "RDA"};
     
-    private static Map<String, String> STATISTICAL_SYNTAX_FILE_EXTENSION = new HashMap<String, String>();
-   
+    private static Map<String, String> STATISTICAL_FILE_EXTENSION = new HashMap<String, String>();
+    
     /*
      * The following are Stata, SAS and SPSS syntax/control cards: 
      * These are recognized as text files (because they are!) so 
@@ -68,36 +136,119 @@ public class FileUtil implements java.io.Serializable  {
     */
     
     static {
-        STATISTICAL_SYNTAX_FILE_EXTENSION.put("do",  "application/x-stata-syntax");
-        STATISTICAL_SYNTAX_FILE_EXTENSION.put("sas", "application/x-sas-syntax");
-        STATISTICAL_SYNTAX_FILE_EXTENSION.put("sps", "application/x-spss-syntax");
+        STATISTICAL_FILE_EXTENSION.put("do",  "application/x-stata-syntax");
+        STATISTICAL_FILE_EXTENSION.put("sas", "application/x-sas-syntax");
+        STATISTICAL_FILE_EXTENSION.put("sps", "application/x-spss-syntax");
+        STATISTICAL_FILE_EXTENSION.put("csv", "text/csv");
+        STATISTICAL_FILE_EXTENSION.put("tsv", "text/tsv");
     }
     
     private static MimetypesFileTypeMap MIME_TYPE_MAP = new MimetypesFileTypeMap();
+    
+    public static final String MIME_TYPE_STATA   = "application/x-stata";
+    public static final String MIME_TYPE_STATA13 = "application/x-stata-13";
+    public static final String MIME_TYPE_STATA14 = "application/x-stata-14";
+    public static final String MIME_TYPE_STATA15 = "application/x-stata-15";
+    public static final String MIME_TYPE_RDATA   = "application/x-rlang-transport";
+    
+    public static final String MIME_TYPE_CSV     = "text/csv";
+    public static final String MIME_TYPE_CSV_ALT = "text/comma-separated-values";
+    public static final String MIME_TYPE_TSV     = "text/tsv";
+    public static final String MIME_TYPE_TSV_ALT = "text/tab-separated-values";
+    public static final String MIME_TYPE_XLSX    = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    
+    public static final String MIME_TYPE_SPSS_SAV = "application/x-spss-sav";
+    public static final String MIME_TYPE_SPSS_POR = "application/x-spss-por";
+    
+    
+    public static final String MIME_TYPE_FITS  = "application/fits";
+    
+    public static final String MIME_TYPE_ZIP   = "application/zip";
+    
+    public static final String MIME_TYPE_FITSIMAGE = "image/fits";
+    // SHAPE file type: 
+    // this is the only supported file type in the GEO DATA class:
+    
+    public static final String MIME_TYPE_GEO_SHAPE = "application/zipped-shapefile";
+    
+    public static final String MIME_TYPE_UNDETERMINED_DEFAULT = "application/octet-stream";
+    public static final String MIME_TYPE_UNDETERMINED_BINARY = "application/binary";
+    
+    public static final String SAVED_ORIGINAL_FILENAME_EXTENSION = "orig";
+    
+    //Todo - this is the same as MIME_TYPE_TSV_ALT
+    public static final String MIME_TYPE_INGESTED_FILE = "text/tab-separated-values";
+
+    public static final String MIME_TYPE_NETCDF = "application/netcdf";
+    public static final String MIME_TYPE_XNETCDF = "application/x-netcdf";
+    public static final String MIME_TYPE_HDF5 = "application/x-hdf5";
+
+    // File type "thumbnail classes" tags:
+    
+    public static final String FILE_THUMBNAIL_CLASS_AUDIO = "audio";
+    public static final String FILE_THUMBNAIL_CLASS_CODE = "code";
+    public static final String FILE_THUMBNAIL_CLASS_DOCUMENT = "document";
+    public static final String FILE_THUMBNAIL_CLASS_ASTRO = "astro";
+    public static final String FILE_THUMBNAIL_CLASS_IMAGE = "image";
+    public static final String FILE_THUMBNAIL_CLASS_NETWORK = "network";
+    public static final String FILE_THUMBNAIL_CLASS_GEOSHAPE = "geodata";
+    public static final String FILE_THUMBNAIL_CLASS_TABULAR = "tabular";
+    public static final String FILE_THUMBNAIL_CLASS_VIDEO = "video";
+    public static final String FILE_THUMBNAIL_CLASS_PACKAGE = "package";
+    public static final String FILE_THUMBNAIL_CLASS_OTHER = "other";
+    
+    // File type facets, as returned by the getFacetFileType() method in this utility: 
+    
+    private static final String FILE_FACET_CLASS_ARCHIVE = "Archive";
+    private static final String FILE_FACET_CLASS_AUDIO = "Audio";
+    private static final String FILE_FACET_CLASS_CODE = "Code";
+    private static final String FILE_FACET_CLASS_DATA = "Data";
+    private static final String FILE_FACET_CLASS_DOCUMENT = "Document";
+    private static final String FILE_FACET_CLASS_ASTRO = "FITS";
+    private static final String FILE_FACET_CLASS_IMAGE = "Image";
+    private static final String FILE_FACET_CLASS_NETWORK = "Network Data";
+    private static final String FILE_FACET_CLASS_GEOSHAPE = "Shape";
+    private static final String FILE_FACET_CLASS_TABULAR = "Tabular Data";
+    private static final String FILE_FACET_CLASS_VIDEO = "Video";
+    private static final String FILE_FACET_CLASS_TEXT = "Text";
+    private static final String FILE_FACET_CLASS_OTHER = "Other";
+    private static final String FILE_FACET_CLASS_UNKNOWN = "Unknown";
+
+    // The file type facets and type-specific thumbnail classes (above) are
+    // very similar, but not exactly 1:1; so the following map is for 
+    // maintaining the relationship between the two:
+    
+    public static Map<String, String> FILE_THUMBNAIL_CLASSES = new HashMap<String, String>();
+    
+    static {
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_VIDEO, FILE_THUMBNAIL_CLASS_VIDEO);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_AUDIO, FILE_THUMBNAIL_CLASS_AUDIO);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_CODE, FILE_THUMBNAIL_CLASS_CODE);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_DATA, FILE_THUMBNAIL_CLASS_TABULAR);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_NETWORK, FILE_THUMBNAIL_CLASS_NETWORK);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_ASTRO, FILE_THUMBNAIL_CLASS_ASTRO);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_IMAGE, FILE_THUMBNAIL_CLASS_IMAGE);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_DOCUMENT, FILE_THUMBNAIL_CLASS_DOCUMENT);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_GEOSHAPE, FILE_THUMBNAIL_CLASS_GEOSHAPE);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_TABULAR, FILE_THUMBNAIL_CLASS_TABULAR);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_TEXT, FILE_THUMBNAIL_CLASS_DOCUMENT);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_OTHER, FILE_THUMBNAIL_CLASS_OTHER);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_UNKNOWN, FILE_THUMBNAIL_CLASS_OTHER);
+        FILE_THUMBNAIL_CLASSES.put(FILE_FACET_CLASS_ARCHIVE, FILE_THUMBNAIL_CLASS_PACKAGE);
+    }
+    
+    private static final String FILE_LIST_DATE_FORMAT = "d-MMMM-yyyy HH:mm";
+
+    /**
+     * This string can be prepended to a Base64-encoded representation of a PNG
+     * file in order to imbed an image directly into an HTML page using the
+     * "img" tag. See also https://en.wikipedia.org/wiki/Data_URI_scheme
+     */
+    public static String DATA_URI_SCHEME = "data:image/png;base64,";
 
     public FileUtil() {
     }
     
-    public static void copyFile(File inputFile, File outputFile) throws IOException {
-        FileChannel in = null;
-        WritableByteChannel out = null;
-        
-        try {
-            in = new FileInputStream(inputFile).getChannel();
-            out = new FileOutputStream(outputFile).getChannel();
-            long bytesPerIteration = 50000;
-            long start = 0;
-            while ( start < in.size() ) {
-                in.transferTo(start, bytesPerIteration, out);
-                start += bytesPerIteration;
-            }
-            
-        } finally {
-            if (in != null) { in.close(); }
-            if (out != null) { out.close(); }
-        }
-    }
-
    
     public static String getFileExtension(String fileName){
         String ext = null;
@@ -127,11 +278,11 @@ public class FileUtil implements java.io.Serializable  {
             if (fileType.equalsIgnoreCase(ShapefileHandler.SHAPEFILE_FILE_TYPE)){
                 return ShapefileHandler.SHAPEFILE_FILE_TYPE_FRIENDLY_NAME;
             }
-            if (fileType.indexOf(";") != -1) {
+            if (fileType.contains(";")) {
                 fileType = fileType.substring(0, fileType.indexOf(";"));
             }
             try {
-                return ResourceBundle.getBundle("MimeTypeDisplay").getString(fileType);
+                return BundleUtil.getStringFromPropertyFile(fileType,"MimeTypeDisplay" );
             } catch (MissingResourceException e) {
                 return fileType;
             }
@@ -139,41 +290,98 @@ public class FileUtil implements java.io.Serializable  {
 
         return fileType;
     }
-    
-    public static String getFacetFileType(DataFile dataFile) {
-        String fileType = dataFile.getContentType();
-        
-        if (fileType != null) {
-            if (fileType.indexOf(";") != -1) {
-                fileType = fileType.substring(0, fileType.indexOf(";"));
-            }
 
-            try {
-                return ResourceBundle.getBundle("MimeTypeFacets").getString(fileType);
-            } catch (MissingResourceException e) {
-                // if there's no defined "facet-friendly" form of this mime type
-                // we'll truncate the available type by "/", e.g., all the 
-                // unknown image/* types will become "image"; many other, quite
-                // different types will all become "application" this way - 
-                // but it is probably still better than to tag them all as 
-                // "uknown". 
-                // -- L.A. 4.0 alpha 1
-                return fileType.split("/")[0];
+    public static String getIndexableFacetFileType(DataFile dataFile) {
+        String fileType = getFileType(dataFile);
+        try {
+            return BundleUtil.getStringFromDefaultPropertyFile(fileType,"MimeTypeFacets"  );
+        } catch (MissingResourceException ex) {
+            // if there's no defined "facet-friendly" form of this mime type
+            // we'll truncate the available type by "/", e.g., all the
+            // unknown image/* types will become "image".
+            // Since many other, quite different types would then all become
+            // "application" - we will use the facet "Other" for all the
+            // application/* types not specifically defined in the properties file.
+            //
+            // UPDATE, MH 4.9.2
+            // Since production is displaying both "tabulardata" and "Tabular Data"
+            // we are going to try to add capitalization here to this function
+            // in order to capitalize all the unknown types that are not called
+            // out in MimeTypeFacets.properties
+
+            if (!StringUtil.isEmpty(fileType)) {
+                String typeClass = fileType.split("/")[0];
+                if ("application".equalsIgnoreCase(typeClass)) {
+                    return FILE_FACET_CLASS_OTHER;
+                }
+
+                return Character.toUpperCase(typeClass.charAt(0)) + typeClass.substring(1);
+            } else {
+                return null;
             }
         }
-        
-        return "unknown"; 
+    }
+
+    public static String getFileType(DataFile dataFile) {
+        String fileType = dataFile.getContentType();
+
+        if (!StringUtil.isEmpty(fileType)) {
+            if (fileType.contains(";")) {
+                fileType = fileType.substring(0, fileType.indexOf(";"));
+            }
+            return fileType;
+        } else {
+            return "application/octet-stream";
+        }
+
+    }
+
+    public static String getFacetFileType(DataFile dataFile) {
+        String fileType = getFileType(dataFile);
+        try {
+            return BundleUtil.getStringFromPropertyFile(fileType,"MimeTypeFacets"  );
+        } catch (MissingResourceException ex) {
+            // if there's no defined "facet-friendly" form of this mime type
+            // we'll truncate the available type by "/", e.g., all the
+            // unknown image/* types will become "image".
+            // Since many other, quite different types would then all become
+            // "application" - we will use the facet "Other" for all the
+            // application/* types not specifically defined in the properties file.
+            //
+            // UPDATE, MH 4.9.2
+            // Since production is displaying both "tabulardata" and "Tabular Data"
+            // we are going to try to add capitalization here to this function
+            // in order to capitalize all the unknown types that are not called
+            // out in MimeTypeFacets.properties
+
+            if (!StringUtil.isEmpty(fileType)) {
+                String typeClass = fileType.split("/")[0];
+                if ("application".equalsIgnoreCase(typeClass)) {
+                    return FILE_FACET_CLASS_OTHER;
+                }
+
+                return Character.toUpperCase(typeClass.charAt(0)) + typeClass.substring(1);
+            }
+            else
+            {
+                return  null;
+            }
+        }
     }
     
     public static String getUserFriendlyOriginalType(DataFile dataFile) {
+        if (!dataFile.isTabularData()) {
+            return null; 
+        }
+        
         String fileType = dataFile.getOriginalFileFormat();
          
         if (fileType != null && !fileType.equals("")) {
-            if (fileType.indexOf(";") != -1) {
+            if (fileType.contains(";")) {
                 fileType = fileType.substring(0, fileType.indexOf(";"));
             }
             try {
-                return ResourceBundle.getBundle("MimeTypeDisplay").getString(fileType);
+                return BundleUtil.getStringFromPropertyFile(fileType,"MimeTypeDisplay" );
             } catch (MissingResourceException e) {
                 return fileType;
             }
@@ -182,10 +390,40 @@ public class FileUtil implements java.io.Serializable  {
         return "UNKNOWN";
     }
     
+    /**
+     *  Returns a content type string for a FileObject
+     * 
+     */
+    public static String determineContentType(File fileObject) {
+        if (fileObject==null){
+            return null;
+        }
+        String contentType;
+        try {
+            contentType = determineFileType(fileObject, fileObject.getName());
+        } catch (Exception ex) {
+            logger.warning("FileUtil.determineFileType failed for file with name: " + fileObject.getName());
+            contentType = null;
+        }
+
+       if ((contentType==null)||(contentType.equals(""))){
+            contentType = MIME_TYPE_UNDETERMINED_DEFAULT;
+       }
+       return contentType;
+        
+    }
+    
+    public static String retestIngestableFileType(File file, String fileType) {
+        IngestableDataChecker tabChecker = new IngestableDataChecker(TABULAR_DATA_FORMAT_SET);
+        String newType = tabChecker.detectTabularDataFormat(file);
+        
+        return newType != null ? newType : fileType;
+    }
+    
     public static String determineFileType(File f, String fileName) throws IOException{
         String fileType = null;
         String fileExtension = getFileExtension(fileName);
-
+        
         
         
         // step 1: 
@@ -215,32 +453,45 @@ public class FileUtil implements java.io.Serializable  {
                 fileType = "application/fits";
             }
         }
+
+        // step 3a: Check if NetCDF or HDF5
+        if (fileType == null) {
+            fileType = checkNetcdfOrHdf5(f);
+        }
        
         // step 3: check the mime type of this file with Jhove
         if (fileType == null){
             JhoveFileType jw = new JhoveFileType();
-            fileType = jw.getFileMimeType(f);
+            String mimeType = jw.getFileMimeType(f);
+            if (mimeType != null) {
+                fileType = mimeType;
+            }
         }
         
         // step 4: 
         // Additional processing; if we haven't gotten much useful information 
         // back from Jhove, we'll try and make an educated guess based on 
-        // the file extension:
-        
+        // the file name and extension:
+
         if ( fileExtension != null) {
             logger.fine("fileExtension="+fileExtension);
 
-            if (fileType != null && fileType.startsWith("text/plain")){
-                if (( fileExtension != null) && (STATISTICAL_SYNTAX_FILE_EXTENSION.containsKey(fileExtension))) {
-                    // replace the mime type with the value of the HashMap
-                    fileType = STATISTICAL_SYNTAX_FILE_EXTENSION.get(fileExtension);
+            if (fileType == null || fileType.startsWith("text/plain") || "application/octet-stream".equals(fileType)) {
+                if (fileType != null && fileType.startsWith("text/plain") && STATISTICAL_FILE_EXTENSION.containsKey(fileExtension)) {
+                    fileType = STATISTICAL_FILE_EXTENSION.get(fileExtension);
+                } else {
+                    fileType = determineFileTypeByNameAndExtension(fileName);
                 }
-            } else if ("application/octet-stream".equals(fileType)) {
-                fileType = determineFileType(fileName);
+
                 logger.fine("mime type recognized by extension: "+fileType);
             }
         } else {
             logger.fine("fileExtension is null");
+            String fileTypeByName = lookupFileTypeFromPropertiesFile(fileName);
+            if(!StringUtil.isEmpty(fileTypeByName)) {
+                logger.fine(String.format("mime type: %s recognized by filename: %s", fileTypeByName, fileName));
+                fileType = fileTypeByName;
+            }
         }
         
         // step 5: 
@@ -279,17 +530,52 @@ public class FileUtil implements java.io.Serializable  {
               //  logger.info("------- shapefile FOUND ----------");
                  fileType = ShapefileHandler.SHAPEFILE_FILE_TYPE; //"application/zipped-shapefile";
              }
+
+            Optional<BagItFileHandler> bagItFileHandler = CDI.current().select(BagItFileHandlerFactory.class).get().getBagItFileHandler();
+             if(bagItFileHandler.isPresent() && bagItFileHandler.get().isBagItPackage(fileName, f)) {
+                 fileType = BagItFileHandler.FILE_TYPE;
+             }
         } 
         
+        if(fileType==null) {
+            fileType = MIME_TYPE_UNDETERMINED_DEFAULT;
+        }
         logger.fine("returning fileType "+fileType);
         return fileType;
     }
-    
-    public static String determineFileType(String fileName) {
-        return MIME_TYPE_MAP.getContentType(fileName);
+
+    public static String determineFileTypeByNameAndExtension(String fileName) {
+        String mimetypesFileTypeMapResult = MIME_TYPE_MAP.getContentType(fileName);
+        logger.fine("MimetypesFileTypeMap type by extension, for " + fileName + ": " + mimetypesFileTypeMapResult);
+        if (mimetypesFileTypeMapResult != null) {
+            if ("application/octet-stream".equals(mimetypesFileTypeMapResult)) {
+                return lookupFileTypeFromPropertiesFile(fileName);
+            } else {
+                return mimetypesFileTypeMapResult;
+            }
+        } else {
+            return null;
+        }
     }
-    
-    
+
+    public static String lookupFileTypeFromPropertiesFile(String fileName) {
+        String fileKey = FilenameUtils.getExtension(fileName);
+        String propertyFileName = "MimeTypeDetectionByFileExtension";
+        if(fileKey == null || fileKey.isEmpty()) {
+            fileKey = fileName;
+            propertyFileName = "MimeTypeDetectionByFileName";
+
+        }
+        String propertyFileNameOnDisk = propertyFileName + ".properties";
+        try {
+            logger.fine("checking " + propertyFileNameOnDisk + " for file key " + fileKey);
+            return BundleUtil.getStringFromPropertyFile(fileKey, propertyFileName);
+        } catch (MissingResourceException ex) {
+            logger.info(fileKey + " is a filename/extension Dataverse doesn't know about. Consider adding it to the " + propertyFileNameOnDisk + " file.");
+            return null;
+        }
+    }
+
     /* 
      * Custom method for identifying FITS files: 
      * TODO: 
@@ -299,12 +585,11 @@ public class FileUtil implements java.io.Serializable  {
      * -- L.A. 4.0 alpha
     */
     private static boolean isFITSFile(File file) {
-        BufferedInputStream ins = null;
 
-        try {
-            ins = new BufferedInputStream(new FileInputStream(file));
+        try (BufferedInputStream ins = new BufferedInputStream(new FileInputStream(file))) {
             return isFITSFile(ins);
         } catch (IOException ex) {
+            logger.fine("IOException: "+ ex.getMessage());
         } 
         
         return false;
@@ -345,8 +630,9 @@ public class FileUtil implements java.io.Serializable  {
     private static boolean isGraphMLFile(File file) {
         boolean isGraphML = false;
         logger.fine("begin isGraphMLFile()");
+        FileReader fileReader = null;
         try{
-            FileReader fileReader = new FileReader(file);
+            fileReader = new FileReader(file);
             javax.xml.stream.XMLInputFactory xmlif = javax.xml.stream.XMLInputFactory.newInstance();
             xmlif.setProperty("javax.xml.stream.isCoalescing", java.lang.Boolean.TRUE);
 
@@ -356,7 +642,7 @@ public class FileUtil implements java.io.Serializable  {
                     if (xmlr.getLocalName().equals("graphml")) {
                         String schema = xmlr.getAttributeValue("http://www.w3.org/2001/XMLSchema-instance", "schemaLocation");
                         logger.fine("schema = "+schema);
-                        if (schema!=null && schema.indexOf("http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd")!=-1){
+                        if (schema!=null && schema.contains("http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd")){
                             logger.fine("graphML is true");
                             isGraphML = true;
                         }
@@ -369,36 +655,1154 @@ public class FileUtil implements java.io.Serializable  {
             isGraphML = false;
         } catch(IOException e) {
             throw new EJBException(e);
+        } finally {
+            if (fileReader != null) {
+                try {
+                    fileReader.close();
+                } catch (IOException ioex) {
+                    logger.warning("IOException closing file reader in GraphML type checker");
+                }
+            }
         }
         logger.fine("end isGraphML()");
         return isGraphML;
     }
+
+    public static String checkNetcdfOrHdf5(File file) {
+        try ( NetcdfFile netcdfFile = NetcdfFiles.open(file.getAbsolutePath())) {
+            if (netcdfFile == null) {
+                // Can't open as a NetCDF or HDF5 file.
+                return null;
+            }
+            String type = netcdfFile.getFileTypeId();
+            if (type == null) {
+                return null;
+            }
+            switch (type) {
+                case "NetCDF":
+                    return "application/netcdf";
+                case "NetCDF-4":
+                    return "application/netcdf";
+                case "HDF5":
+                    return "application/x-hdf5";
+                default:
+                    break;
+            }
+        } catch (IOException ex) {
+            /**
+             * When an HDF4 file is passed, it won't be detected. Instead, we've
+             * seen exceptions like this:
+             *
+             * ucar.nc2.internal.iosp.hdf4.H4header makeDimension WARNING:
+             * **dimension length=0 for TagVGroup= *refno=124 tag= VG (1965)
+             * Vgroup length=28 class= Dim0.0 name= ixx using data 123
+             *
+             * java.lang.IllegalArgumentException: Dimension length =0 must be >
+             * 0
+             */
+            return null;
+        }
+        return null;
+    }
+
+    // from MD5Checksum.java
+    public static String calculateChecksum(String datafile, ChecksumType checksumType) {
+
+        FileInputStream fis = null;
+        try {
+            fis = new FileInputStream(datafile);
+        } catch (FileNotFoundException ex) {
+            throw new RuntimeException(ex);
+        }
+
+        return FileUtil.calculateChecksum(fis, checksumType);
+    }
+
+    // from MD5Checksum.java
+    public static String calculateChecksum(InputStream in, ChecksumType checksumType) {
+        MessageDigest md = null;
+        try {
+            // Use "SHA-1" (toString) rather than "SHA1", for example.
+            md = MessageDigest.getInstance(checksumType.toString());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
+
+        byte[] dataBytes = new byte[1024];
+
+        int nread;
+        try {
+            while ((nread = in.read(dataBytes)) != -1) {
+                md.update(dataBytes, 0, nread);
+            }
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        } finally {
+            try {
+                in.close();
+            } catch (Exception e) {
+            }
+        }
+
+        return checksumDigestToString(md.digest());
+    }
+    
+    public static String calculateChecksum(byte[] dataBytes, ChecksumType checksumType) {
+        MessageDigest md = null;
+        try {
+            // Use "SHA-1" (toString) rather than "SHA1", for example.
+            md = MessageDigest.getInstance(checksumType.toString());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
+
+        md.update(dataBytes);
+
+        return checksumDigestToString(md.digest());
+        
+    }
+    
+    public static String checksumDigestToString(byte[] digestBytes) {
+        StringBuilder sb = new StringBuilder("");
+        for (int i = 0; i < digestBytes.length; i++) {
+            sb.append(Integer.toString((digestBytes[i] & 0xff) + 0x100, 16).substring(1));
+        }
+        return sb.toString();
+    }
+
+    public static String generateOriginalExtension(String fileType) {
+        if (fileType.equalsIgnoreCase("application/x-spss-sav")) {
+            return ".sav";
+        } else if (fileType.equalsIgnoreCase("application/x-spss-por")) {
+            return ".por";    
+        // in addition to "application/x-stata" we want to support 
+        // "application/x-stata-13" ... etc.:
+        } else if (fileType.toLowerCase().startsWith("application/x-stata")) {
+            return ".dta";
+        } else if (fileType.equalsIgnoreCase("application/x-dvn-csvspss-zip")) {
+            return ".zip";
+        } else if (fileType.equalsIgnoreCase("application/x-dvn-tabddi-zip")) {
+            return ".zip";
+        } else if (fileType.equalsIgnoreCase("application/x-rlang-transport")) {
+            return ".RData";
+        } else if (fileType.equalsIgnoreCase("text/csv") || fileType.equalsIgnoreCase("text/comma-separated-values")) {
+            return ".csv";
+        } else if (fileType.equalsIgnoreCase("text/tsv") || fileType.equalsIgnoreCase("text/tab-separated-values")) {
+            return ".tsv";
+        } else if (fileType.equalsIgnoreCase("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) {
+            return ".xlsx";
+        }
+        return "";
+    }
+
+	public static boolean useRecognizedType(String suppliedContentType, String recognizedType) {
+		// is it any better than the type that was supplied to us,
+		// if any?
+		// This is not as trivial a task as one might expect...
+		// We may need a list of "good" mime types, that should always
+		// be chosen over other choices available. Maybe it should
+		// even be a weighed list... as in, "application/foo" should
+		// be chosen over "application/foo-with-bells-and-whistles".
+
+		// For now the logic will be as follows:
+		//
+		// 1. If the contentType supplied (by the browser, most likely)
+		// is some form of "unknown", we always discard it in favor of
+		// whatever our own utilities have determined;
+		// 2. We should NEVER trust the browser when it comes to the
+		// following "ingestable" types: Stata, SPSS, R;
+		// 2a. We are willing to TRUST the browser when it comes to
+		// the CSV and XSLX ingestable types.
+		// 3. We should ALWAYS trust our utilities when it comes to
+		// ingestable types.
+		if (suppliedContentType == null || suppliedContentType.equals("")
+				|| suppliedContentType.equalsIgnoreCase(MIME_TYPE_UNDETERMINED_DEFAULT)
+				|| suppliedContentType.equalsIgnoreCase(MIME_TYPE_UNDETERMINED_BINARY)
+				|| (canIngestAsTabular(suppliedContentType) 
+						&& !suppliedContentType.equalsIgnoreCase(MIME_TYPE_CSV)
+						&& !suppliedContentType.equalsIgnoreCase(MIME_TYPE_CSV_ALT)
+						&& !suppliedContentType.equalsIgnoreCase(MIME_TYPE_XLSX))
+				|| canIngestAsTabular(recognizedType) || recognizedType.equals("application/fits-gzipped")
+				|| recognizedType.equalsIgnoreCase(ShapefileHandler.SHAPEFILE_FILE_TYPE)
+				|| recognizedType.equalsIgnoreCase(BagItFileHandler.FILE_TYPE)
+				|| recognizedType.equals(MIME_TYPE_ZIP)) {
+			return true;
+		}
+		return false;
+	}
+
+	public static File saveInputStreamInTempFile(InputStream inputStream, Long fileSizeLimit)
+            throws IOException, FileExceedsMaxSizeException, FileExceedsStorageQuotaException {
+            return saveInputStreamInTempFile(inputStream, fileSizeLimit, null);
+        }
+        
+        public static File saveInputStreamInTempFile(InputStream inputStream, Long fileSizeLimit, Long storageQuotaLimit)
+            throws IOException, FileExceedsMaxSizeException, FileExceedsStorageQuotaException {
+        Path tempFile = Files.createTempFile(Paths.get(getFilesTempDirectory()), "tmp", "upload");
+        
+        if (inputStream != null && tempFile != null) {
+            Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            
+            // size check: 
+            // (note that "no size limit set" = "unlimited")
+            Long fileSize = tempFile.toFile().length();
+            if (fileSizeLimit != null && fileSize > fileSizeLimit) {
+                try {tempFile.toFile().delete();} catch (Exception ex) {}
+                throw new FileExceedsMaxSizeException(MessageFormat.format(BundleUtil.getStringFromBundle("file.addreplace.error.file_exceeds_limit"), bytesToHumanReadable(fileSize), bytesToHumanReadable(fileSizeLimit)));  
+            }
+            
+            if (storageQuotaLimit != null && fileSize > storageQuotaLimit) {
+                try {tempFile.toFile().delete();} catch (Exception ex) {}
+                throw new FileExceedsStorageQuotaException(MessageFormat.format(BundleUtil.getStringFromBundle("file.addreplace.error.quota_exceeded"), bytesToHumanReadable(fileSize), bytesToHumanReadable(storageQuotaLimit)));  
+            }
+            
+            return tempFile.toFile();
+        }
+        throw new IOException("Failed to save uploaded file.");
+    }
+    
+    /* 
+     * This method creates a DataFile; 
+     * The bytes from the suppplied InputStream have already been saved in the temporary location. 
+     * This method should only be called by the upper-level methods that handle 
+     * file upload and creation for individual use cases - a single file upload, 
+     * an upload of a zip archive that needs to be unpacked and turned into 
+     * individual files, etc., and once the file name and mime type have already 
+     * been figured out. 
+    */
+
+    public static DataFile createSingleDataFile(DatasetVersion version, File tempFile, String fileName, String contentType, DataFile.ChecksumType checksumType) {
+        return createSingleDataFile(version, tempFile, null, fileName, contentType, checksumType, null, false);
+    }
+
+    public static DataFile createSingleDataFile(DatasetVersion version, File tempFile, String storageIdentifier,  String fileName, String contentType, DataFile.ChecksumType checksumType, String checksum) {
+        return createSingleDataFile(version, tempFile, storageIdentifier, fileName, contentType, checksumType, checksum, false);
+    }
+    
+    public static DataFile createSingleDataFile(DatasetVersion version, File tempFile, String storageIdentifier, String fileName, String contentType, DataFile.ChecksumType checksumType, String checksum, boolean addToDataset) {
+
+        if ((tempFile == null) && (storageIdentifier == null)) {
+            return null;
+        }
+
+        DataFile datafile = new DataFile(contentType);
+        datafile.setModificationTime(new Timestamp(new Date().getTime()));
+        /**
+         * @todo Think more about when permissions on files are modified.
+         * Obviously, here at create time files have some sort of permissions,
+         * even if these permissions are *implied*, by ViewUnpublishedDataset at
+         * the dataset level, for example.
+         */
+        datafile.setPermissionModificationTime(new Timestamp(new Date().getTime()));
+        FileMetadata fmd = new FileMetadata();
+
+        fmd.setLabel(fileName);
+
+        if (addToDataset) {
+            datafile.setOwner(version.getDataset());
+        }
+        fmd.setDataFile(datafile);
+        datafile.getFileMetadatas().add(fmd);
+        if (addToDataset) {
+            if (version.getFileMetadatas() == null) {
+                version.setFileMetadatas(new ArrayList<>());
+            }
+            version.getFileMetadatas().add(fmd);
+            fmd.setDatasetVersion(version);
+            version.getDataset().getFiles().add(datafile);
+        }
+        if (storageIdentifier == null) {
+            generateStorageIdentifier(datafile);
+            if (!tempFile.renameTo(new File(getFilesTempDirectory() + "/" + datafile.getStorageIdentifier()))) {
+                return null;
+            }
+        } else {
+            datafile.setStorageIdentifier(storageIdentifier);
+        }
+
+        if ((checksum !=null)&&(!checksum.isEmpty())) {
+        	datafile.setChecksumType(checksumType);
+            datafile.setChecksumValue(checksum);
+        } else {
+        	try {
+        		// We persist "SHA1" rather than "SHA-1".
+        		datafile.setChecksumType(checksumType);
+        		datafile.setChecksumValue(calculateChecksum(getFilesTempDirectory() + "/" + datafile.getStorageIdentifier(), datafile.getChecksumType()));
+        	} catch (Exception cksumEx) {
+        		logger.warning("Could not calculate " + checksumType + " signature for the new file " + fileName);
+        	}
+        }
+        return datafile;
+    }
+    
     
     /**
-     * The number of bytes in a kilobyte, megabyte and gigabyte:
+        For the restructuring of zipped shapefiles, create a timestamped directory.
+        This directory is deleted after successful restructuring.
+    
+        Naming convention: getFilesTempDirectory() + "shp_" + "yyyy-MM-dd-hh-mm-ss-SSS"
+    */
+    public static File getShapefileUnzipTempDirectory(){
+        
+        String tempDirectory = getFilesTempDirectory();
+        if (tempDirectory == null){
+            logger.severe("Failed to retrieve tempDirectory, null was returned" );
+            return null;
+        }
+        String datestampedFileName =  "shp_" + new SimpleDateFormat("yyyy-MM-dd-hh-mm-ss-SSS").format(new Date());
+        String datestampedFolderName = tempDirectory + "/" + datestampedFileName;
+        
+        File datestampedFolder = new File(datestampedFolderName);
+        if (!datestampedFolder.isDirectory()) {
+            /* Note that "createDirectories()" must be used - not 
+             * "createDirectory()", to make sure all the parent 
+             * directories that may not yet exist are created as well. 
+             */
+            try {
+                Files.createDirectories(Paths.get(datestampedFolderName));
+            } catch (IOException ex) {
+                logger.severe("Failed to create temp. directory to unzip shapefile: " + datestampedFolderName );
+                return null;
+            }
+        }
+        return datestampedFolder;        
+    }
+    
+    public static boolean canIngestAsTabular(DataFile dataFile) {
+        String mimeType = dataFile.getContentType();
+        
+        return canIngestAsTabular(mimeType);
+    } 
+    
+    public static boolean canIngestAsTabular(String mimeType) {
+        /* 
+         * In the final 4.0 we'll be doing real-time checks, going through the 
+         * available plugins and verifying the lists of mime types that they 
+         * can handle. In 4.0 beta, the ingest plugins are still built into the 
+         * main code base, so we can just go through a hard-coded list of mime 
+         * types. -- L.A. 
+         */
+        
+        if (mimeType == null) {
+            return false;
+        }
+        
+        switch (mimeType) {
+            case MIME_TYPE_STATA:
+            case MIME_TYPE_STATA13:
+            case MIME_TYPE_STATA14:
+            case MIME_TYPE_STATA15:
+            case MIME_TYPE_RDATA:
+            case MIME_TYPE_CSV:
+            case MIME_TYPE_CSV_ALT:
+            case MIME_TYPE_TSV:
+            //case MIME_TYPE_TSV_ALT:
+            case MIME_TYPE_XLSX:
+            case MIME_TYPE_SPSS_SAV:
+            case MIME_TYPE_SPSS_POR:
+                return true;
+            default:
+                return false;
+        }
+    }
+    
+    /**
+     * Return the location where data should be stored temporarily after uploading (UI or API)
+     * for local processing (ingest, unzip, ...) and transfer to final destination (see storage subsystem).
+     *
+     * This location is checked to be configured, does exist, and is writeable via
+     * {@link ConfigCheckService#checkSystemDirectories()}.
+     *
+     * @return String with a path to the temporary location. Will not be null (former versions did to indicate failure)
      */
-    public static final long ONE_KB = 1024;
-    public static final long ONE_MB = ONE_KB * ONE_KB;
-    public static final long ONE_GB = ONE_KB * ONE_MB;
- 
-    public static String getFriendlySize(Long filesize) {
-        if (filesize == null || filesize.longValue() < 0) {
-            return "unknown";
+    public static String getFilesTempDirectory() {
+        return JvmSettings.FILES_DIRECTORY.lookup() + File.separator + "temp";
+    }
+    
+    public static void generateS3PackageStorageIdentifier(DataFile dataFile) {
+    	String driverId = dataFile.getOwner().getEffectiveStorageDriverId();
+		
+        String bucketName = System.getProperty("dataverse.files." + driverId + ".bucket-name");
+        String storageId = driverId + DataAccess.SEPARATOR + bucketName + ":" + dataFile.getFileMetadata().getLabel();
+        dataFile.setStorageIdentifier(storageId);
+    }
+    
+    public static void generateStorageIdentifier(DataFile dataFile) {
+    	//Is it true that this is only used for temp files and we could safely prepend "tmp://" to indicate that?
+        dataFile.setStorageIdentifier(generateStorageIdentifier());
+    }
+    
+    public static String generateStorageIdentifier() {
+        
+        UUID uid = UUID.randomUUID();
+                
+        logger.log(Level.FINE, "UUID value: {0}", uid.toString());
+        
+        // last 6 bytes, of the random UUID, in hex: 
+        
+        String hexRandom = uid.toString().substring(24);
+        
+        logger.log(Level.FINE, "UUID (last 6 bytes, 12 hex digits): {0}", hexRandom);
+        
+        String hexTimestamp = Long.toHexString(new Date().getTime());
+        
+        logger.log(Level.FINE, "(not UUID) timestamp in hex: {0}", hexTimestamp);
+            
+        String storageIdentifier = hexTimestamp + "-" + hexRandom;
+        
+        logger.log(Level.FINE, "timestamp/UUID hybrid: {0}", storageIdentifier);
+        return storageIdentifier; 
+    }
+    
+    public static void createIngestFailureReport(DataFile dataFile, String message) {
+        createIngestReport(dataFile, IngestReport.INGEST_STATUS_FAILURE, message);
+    }
+    
+    private static void createIngestReport (DataFile dataFile, int status, String message) {
+        IngestReport errorReport = new IngestReport();
+        if (status == IngestReport.INGEST_STATUS_FAILURE) {
+                errorReport.setFailure();
+                errorReport.setReport(message);
+                errorReport.setDataFile(dataFile);
+                dataFile.setIngestReport(errorReport);
         }
+    }
 
-        long bytesize = filesize.longValue();
-        String displaySize;
+    public enum FileCitationExtension {
 
-        if (bytesize / ONE_GB > 0) {
-            displaySize = String.valueOf(bytesize / ONE_GB) + "." + String.valueOf((bytesize % ONE_GB) / (100 * ONE_MB)) + " GB";
-        } else if (bytesize / ONE_MB > 0) {
-            displaySize = String.valueOf(bytesize / ONE_MB) + "." + String.valueOf((bytesize % ONE_MB) / (100 * ONE_KB)) + " MB";
-        } else if (bytesize / ONE_KB > 0) {
-            displaySize = String.valueOf(bytesize / ONE_KB) + "." + String.valueOf((bytesize % ONE_KB) / 100) + " KB";
+        ENDNOTE("-endnote.xml"),
+        RIS(".ris"),
+        BIBTEX(".bib");
+
+        private final String text;
+
+        private FileCitationExtension(final String text) {
+            this.text = text;
+        }
+    }
+
+    public static String getCiteDataFileFilename(String fileTitle, FileCitationExtension fileCitationExtension) {
+    	if((fileTitle==null) || (fileCitationExtension == null)) {
+    		return null;
+    	}
+        if (fileTitle.endsWith("tab")) {
+            return fileTitle.replaceAll("\\.tab$", fileCitationExtension.text);
         } else {
-            displaySize = String.valueOf(bytesize) + " bytes";
+            return fileTitle + fileCitationExtension.text;
         }
-        return displaySize;
+    }
+
+    /**
+     * @todo Consider returning not only the boolean but the human readable
+     * reason why the popup is required, which could be used in the GUI to
+     * elaborate on the text "This file cannot be downloaded publicly."
+     */
+    public static boolean isDownloadPopupRequired(DatasetVersion datasetVersion) {
+        logger.fine("Checking if download popup is required.");
+        Boolean answer = popupDueToStateOrTerms(datasetVersion);
+        if (answer != null) {
+            return answer;
+        }
+        // 3. Guest Book:
+        if (datasetVersion.getDataset() != null && datasetVersion.getDataset().getGuestbook() != null && datasetVersion.getDataset().getGuestbook().isEnabled() && datasetVersion.getDataset().getGuestbook().getDataverse() != null) {
+            logger.fine("Download popup required because of guestbook.");
+            return true;
+        }
+        logger.fine("Download popup is not required.");
+        return false;
+    }
+    
+    public static boolean isRequestAccessPopupRequired(DatasetVersion datasetVersion) {
+        
+        Boolean answer = popupDueToStateOrTerms(datasetVersion);
+        if (answer != null) {
+            return answer;
+        }
+     // 3. Guest Book:
+        if (datasetVersion.getDataset() != null && datasetVersion.getDataset().getGuestbook() != null && datasetVersion.getDataset().getGuestbook().isEnabled() && datasetVersion.getDataset().getGuestbook().getDataverse() != null) {
+            logger.fine("Request access popup required because of guestbook.");
+            return true;
+        }
+        logger.fine("Request access popup is not required.");
+        return false;
+    }
+    
+    /* Code shared by isDownloadPopupRequired and isRequestAccessPopupRequired.
+     * 
+     * Returns Boolean to allow null = no decision. This allows the isDownloadPopupRequired method to then add another check w.r.t. guestbooks before returning its value.
+     * 
+     */
+    private static Boolean popupDueToStateOrTerms(DatasetVersion datasetVersion) {
+
+        // Each of these conditions is sufficient reason to have to
+        // present the user with the popup:
+        if (datasetVersion == null) {
+            logger.fine("Popup not required because datasetVersion is null.");
+            return false;
+        }
+        // 0. if version is draft then Popup "not required"
+        if (!datasetVersion.isReleased()) {
+            logger.fine("Popup not required because datasetVersion has not been released.");
+            return false;
+        }
+        // 1. License and Terms of Use:
+        if (datasetVersion.getTermsOfUseAndAccess() != null) {
+            License license = DatasetUtil.getLicense(datasetVersion);
+            if ((license == null && StringUtils.isNotBlank(datasetVersion.getTermsOfUseAndAccess().getTermsOfUse()))
+                    || (license != null && !license.isDefault())) {
+                logger.fine("Popup required because of license or terms of use.");
+                return true;
+            }
+
+            // 2. Terms of Access:
+            if (!(datasetVersion.getTermsOfUseAndAccess().getTermsOfAccess() == null) && !datasetVersion.getTermsOfUseAndAccess().getTermsOfAccess().equals("")) {
+                logger.fine("Popup required because of terms of access.");
+                return true;
+            }
+        }
+        //No decision based on the criteria above
+        return null;
+    }
+
+    /**
+     * isGuestbookAndTermsPopupRequired
+     * meant to replace both isDownloadPopupRequired() and isRequestAccessDownloadPopupRequired() when the guestbook-terms-popup-fragment.xhtml
+     * replaced file-download-popup-fragment.xhtml and file-request-access-popup-fragment.xhtml
+     * @param datasetVersion
+     * @return boolean
+     */
+
+    public static boolean isGuestbookAndTermsPopupRequired(DatasetVersion datasetVersion) {
+        return isGuestbookPopupRequired(datasetVersion) || isTermsPopupRequired(datasetVersion);
+    }
+
+    public static boolean isGuestbookPopupRequired(DatasetVersion datasetVersion) {
+
+        if (datasetVersion == null) {
+            logger.fine("GuestbookPopup not required because datasetVersion is null.");
+            return false;
+        }
+        //0. if version is draft then Popup "not required"
+        if (!datasetVersion.isReleased()) {
+            logger.fine("GuestbookPopup not required because datasetVersion has not been released.");
+            return false;
+        }
+
+        // 3. Guest Book:
+        if (datasetVersion.getDataset() != null && datasetVersion.getDataset().getGuestbook() != null && datasetVersion.getDataset().getGuestbook().isEnabled() && datasetVersion.getDataset().getGuestbook().getDataverse() != null) {
+            logger.fine("GuestbookPopup required because an enabled guestbook exists.");
+            return true;
+        }
+
+        logger.fine("GuestbookPopup is not required.");
+        return false;
+    }
+
+    public static boolean isTermsPopupRequired(DatasetVersion datasetVersion) {
+
+        if (datasetVersion == null) {
+            logger.fine("TermsPopup not required because datasetVersion is null.");
+            return false;
+        }
+        //0. if version is draft then Popup "not required"
+        if (!datasetVersion.isReleased()) {
+            logger.fine("TermsPopup not required because datasetVersion has not been released.");
+            return false;
+        }
+        // 1. License and Terms of Use:
+        if (datasetVersion.getTermsOfUseAndAccess() != null) {
+            if (!License.CC0.equals(datasetVersion.getTermsOfUseAndAccess().getLicense())
+                    && !(datasetVersion.getTermsOfUseAndAccess().getTermsOfUse() == null
+                    || datasetVersion.getTermsOfUseAndAccess().getTermsOfUse().equals(""))) {
+                logger.fine("TermsPopup required because of license or terms of use.");
+                return true;
+            }
+
+            // 2. Terms of Access:
+            if (!(datasetVersion.getTermsOfUseAndAccess().getTermsOfAccess() == null) && !datasetVersion.getTermsOfUseAndAccess().getTermsOfAccess().equals("")) {
+                logger.fine("TermsPopup required because of terms of access.");
+                return true;
+            }
+        }
+
+        logger.fine("TermsPopup is not required.");
+        return false;
+    }
+    
+    /**
+     * Provide download URL if no Terms of Use, no guestbook, and not
+     * restricted.
+     */
+    public static boolean isPubliclyDownloadable(FileMetadata fileMetadata) {
+        if (fileMetadata == null) {
+            return false;
+        }
+        if (fileMetadata.isRestricted()) {
+            String msg = "Not publicly downloadable because the file is restricted.";
+            logger.fine(msg);
+            return false;
+        }
+        if (isActivelyEmbargoed(fileMetadata)) {
+            return false;
+        }
+        boolean popupReasons = isDownloadPopupRequired(fileMetadata.getDatasetVersion());
+        if (popupReasons == true) {
+            /**
+             * @todo The user clicking publish may have a bad "Dude, where did
+             * the file Download URL go" experience in the following scenario:
+             *
+             * - The user creates a dataset and uploads a file.
+             *
+             * - The user sets Terms of Use, which means a Download URL should
+             * not be displayed.
+             *
+             * - While the dataset is in draft, the Download URL is displayed
+             * due to the rule "Download popup required because datasetVersion
+             * has not been released."
+             *
+             * - Once the dataset is published the Download URL disappears due
+             * to the rule "Download popup required because of license or terms
+             * of use."
+             *
+             * In short, the Download URL disappears on publish in the scenario
+             * above, which is weird. We should probably attempt to see into the
+             * future to when the dataset is published to see if the file will
+             * be publicly downloadable or not.
+             */
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * This is what the UI displays for "Download URL" on the file landing page
+     * (DOIs rather than file IDs.
+     */
+    public static String getPublicDownloadUrl(String dataverseSiteUrl, String persistentId, Long fileId) {
+        String path = null;
+        if(persistentId != null) {
+            path = dataverseSiteUrl + "/api/access/datafile/:persistentId?persistentId=" + persistentId;
+        } else if( fileId != null) {
+            path = dataverseSiteUrl + "/api/access/datafile/" + fileId;
+        } else {
+            logger.info("In getPublicDownloadUrl but persistentId & fileId are both null!");
+        }
+        return path;
+    }
+    
+    /**
+     * The FileDownloadServiceBean operates on file IDs, not DOIs.
+     */
+    public static String getFileDownloadUrlPath(String downloadType, Long fileId, boolean gbRecordsWritten, Long fileMetadataId) {
+        String fileDownloadUrl = "/api/access/datafile/" + fileId;
+        if (downloadType != null) {
+            switch(downloadType) {
+            case "original":
+            case"RData":
+            case "tab":
+            case "GlobusTransfer":
+                    fileDownloadUrl = "/api/access/datafile/" + fileId + "?format=" + downloadType;
+                    break;
+            case "bundle":
+                    if (fileMetadataId == null) {
+                        fileDownloadUrl = "/api/access/datafile/bundle/" + fileId;
+                    } else {
+                        fileDownloadUrl = "/api/access/datafile/bundle/" + fileId + "?fileMetadataId=" + fileMetadataId;
+                    }
+                    break;
+            case "var":
+                    if (fileMetadataId == null) {
+                        fileDownloadUrl = "/api/access/datafile/" + fileId + "/metadata";
+                    } else {
+                        fileDownloadUrl = "/api/access/datafile/" + fileId + "/metadata?fileMetadataId=" + fileMetadataId;
+                    }
+                    break;
+                }
+                
+            }
+        if (gbRecordsWritten) {
+            if (fileDownloadUrl.contains("?")) {
+                fileDownloadUrl += "&gbrecs=true";
+            } else {
+                fileDownloadUrl += "?gbrecs=true";
+            }
+        }
+        logger.fine("Returning file download url: " + fileDownloadUrl);
+        return fileDownloadUrl;
+    }
+
+    public static File inputStreamToFile(InputStream inputStream) throws IOException {
+        if (inputStream == null) {
+            logger.info("In inputStreamToFile but inputStream was null! Returning null rather than a File.");
+            return null;
+        }
+        File file = File.createTempFile(UUID.randomUUID().toString(), UUID.randomUUID().toString());
+        try(OutputStream outputStream = new FileOutputStream(file)){
+        int read = 0;
+        byte[] bytes = new byte[1024];
+        while ((read = inputStream.read(bytes)) != -1) {
+            outputStream.write(bytes, 0, read);
+        }
+        return file;
+	}
+    }
+
+    /* 
+     * This method tells you if thumbnail generation is *supported* 
+     * on this type of file. i.e., if true, it does not guarantee that a thumbnail 
+     * can/will be generated; but it means that we can try. 
+     */
+    public static boolean isThumbnailSupported (DataFile file) {
+        if (file == null) {
+            return false;
+        }
+        
+        if (file.isHarvested() || StringUtil.isEmpty(file.getStorageIdentifier())) {
+            return false;
+        }
+        
+        String contentType = file.getContentType();
+        
+        // Some browsers (Chrome?) seem to identify FITS files as mime
+        // type "image/fits" on upload; this is both incorrect (the official
+        // mime type for FITS is "application/fits", and problematic: then
+        // the file is identified as an image, and the page will attempt to 
+        // generate a preview - which of course is going to fail...
+        if (MIME_TYPE_FITSIMAGE.equalsIgnoreCase(contentType)) {
+            return false;
+        }
+        // besides most image/* types, we can generate thumbnails for
+        // pdf and "world map" files:
+        
+        return (contentType != null && 
+                (contentType.startsWith("image/") || 
+                contentType.equalsIgnoreCase("application/pdf") ||
+                (file.isTabularData() && file.hasGeospatialTag()) ||
+                contentType.equalsIgnoreCase(MIME_TYPE_GEO_SHAPE)));
+    }
+    
+    
+    /* 
+     * The method below appears to be unnecessary; 
+     * it duplicates the method generateImageThumbnailFromFileAsBase64() from ImageThumbConverter;
+     * plus it creates an unnecessary temp file copy of the source file.    
+    public static String rescaleImage(File file) throws IOException {
+        if (file == null) {
+            logger.info("file was null!!");
+            return null;
+        }
+        File tmpFile = File.createTempFile("tempFileToRescale", ".tmp");
+        BufferedImage fullSizeImage = ImageIO.read(file);
+        if (fullSizeImage == null) {
+            logger.info("fullSizeImage was null!");
+            return null;
+        }
+        int width = fullSizeImage.getWidth();
+        int height = fullSizeImage.getHeight();
+        FileChannel src = new FileInputStream(file).getChannel();
+        FileChannel dest = new FileOutputStream(tmpFile).getChannel();
+        dest.transferFrom(src, 0, src.size());
+        String pathToResizedFile = ImageThumbConverter.rescaleImage(fullSizeImage, width, height, ImageThumbConverter.DEFAULT_CARDIMAGE_SIZE, tmpFile.getAbsolutePath());
+        File resizedFile = new File(pathToResizedFile);
+        return ImageThumbConverter.getImageAsBase64FromFile(resizedFile);
+    }
+    */
+    
+    public static DatasetThumbnail getThumbnail(DataFile file) {
+
+        String imageSourceBase64 = ImageThumbConverter.getImageThumbnailAsBase64(file, ImageThumbConverter.DEFAULT_THUMBNAIL_SIZE);
+        DatasetThumbnail defaultDatasetThumbnail = new DatasetThumbnail(imageSourceBase64, file);
+        return defaultDatasetThumbnail;
 
     }
+    
+    public static boolean isPackageFile(DataFile dataFile) {
+        return DataFileServiceBean.MIME_TYPE_PACKAGE_FILE.equalsIgnoreCase(dataFile.getContentType());
+    }
+    
+    public static S3AccessIO getS3AccessForDirectUpload(Dataset dataset) {
+    	String driverId = dataset.getEffectiveStorageDriverId();
+    	boolean directEnabled = Boolean.getBoolean("dataverse.files." + driverId + ".upload-redirect");
+    	//Should only be requested when it is allowed, but we'll log a warning otherwise
+    	if(!directEnabled) {
+    		logger.warning("Direct upload not supported for files in this dataset: " + dataset.getId());
+    		return null;
+    	}
+    	S3AccessIO<DataFile> s3io = null;
+    	String bucket = System.getProperty("dataverse.files." + driverId + ".bucket-name") + "/";
+    	String sid = null;
+    	int i=0;
+    	while (s3io==null && i<5) {
+    		sid = bucket+ dataset.getAuthorityForFileStorage() + "/" + dataset.getIdentifierForFileStorage() + "/" + FileUtil.generateStorageIdentifier();
+    		try {
+    			s3io = new S3AccessIO<DataFile>(sid, driverId);
+    			if(s3io.exists()) {
+    				s3io=null;
+    				i=i+1;
+    			} 
+
+    		} catch (Exception e) {
+    			i=i+1;
+    		}
+
+    	}
+    	return s3io;
+    }
+    
+    public static void validateDataFileChecksum(DataFile dataFile) throws IOException {
+        DataFile.ChecksumType checksumType = dataFile.getChecksumType();
+        if (checksumType == null) {
+            String info = BundleUtil.getStringFromBundle("dataset.publish.file.validation.error.noChecksumType", Arrays.asList(dataFile.getId().toString()));
+            logger.log(Level.INFO, info);
+            throw new IOException(info);
+        }
+
+        StorageIO<DataFile> storage = dataFile.getStorageIO();
+        InputStream in = null;
+
+        try {
+            storage.open(DataAccessOption.READ_ACCESS);
+
+            if (!dataFile.isTabularData()) {
+                in = storage.getInputStream();
+            } else {
+                // if this is a tabular file, read the preserved original "auxiliary file"
+                // instead:
+                in = storage.getAuxFileAsInputStream(FileUtil.SAVED_ORIGINAL_FILENAME_EXTENSION);
+            }
+        } catch (IOException ioex) {
+            in = null;
+        }
+
+        if (in == null) {
+            String info = BundleUtil.getStringFromBundle("dataset.publish.file.validation.error.failRead", Arrays.asList(dataFile.getId().toString()));
+            logger.log(Level.INFO, info);
+            throw new IOException(info);
+        }
+
+        String recalculatedChecksum = null;
+        try {
+            recalculatedChecksum = FileUtil.calculateChecksum(in, checksumType);
+        } catch (RuntimeException rte) {
+            recalculatedChecksum = null;
+        } finally {
+            IOUtils.closeQuietly(in);
+        }
+
+        if (recalculatedChecksum == null) {
+            String info = BundleUtil.getStringFromBundle("dataset.publish.file.validation.error.failCalculateChecksum", Arrays.asList(dataFile.getId().toString()));
+            logger.log(Level.INFO, info);
+            throw new IOException(info);
+        }
+
+        // TODO? What should we do if the datafile does not have a non-null checksum?
+        // Should we fail, or should we assume that the recalculated checksum
+        // is correct, and populate the checksumValue field with it?
+        if (!recalculatedChecksum.equals(dataFile.getChecksumValue())) {
+            // There's one possible condition that is 100% recoverable and can
+            // be automatically fixed (issue #6660):
+            boolean fixed = false;
+            if (!dataFile.isTabularData() && dataFile.getIngestReport() != null) {
+                // try again, see if the .orig file happens to be there:
+                try {
+                    in = storage.getAuxFileAsInputStream(FileUtil.SAVED_ORIGINAL_FILENAME_EXTENSION);
+                } catch (IOException ioex) {
+                    in = null;
+                }
+                if (in != null) {
+                    try {
+                        recalculatedChecksum = FileUtil.calculateChecksum(in, checksumType);
+                    } catch (RuntimeException rte) {
+                        recalculatedChecksum = null;
+                    } finally {
+                        IOUtils.closeQuietly(in);
+                    }
+                    // try again:
+                    if (recalculatedChecksum.equals(dataFile.getChecksumValue())) {
+                        fixed = true;
+                        try {
+                            storage.revertBackupAsAux(FileUtil.SAVED_ORIGINAL_FILENAME_EXTENSION);
+                        } catch (IOException ioex) {
+                            fixed = false;
+                        }
+                    }
+                }
+            }
+
+            if (!fixed) {
+                String info = BundleUtil.getStringFromBundle("dataset.publish.file.validation.error.wrongChecksumValue", Arrays.asList(dataFile.getId().toString()));
+                logger.log(Level.INFO, info);
+                logger.fine("Expected: " + dataFile.getChecksumValue() +", calculated: " + recalculatedChecksum);
+                throw new IOException(info);
+            }
+        }
+
+        logger.log(Level.INFO, "successfully validated DataFile {0}; checksum {1}", new Object[]{dataFile.getId(), recalculatedChecksum});
+    }
+    
+    public static String getStorageIdentifierFromLocation(String location) {
+    	int driverEnd = location.indexOf(DataAccess.SEPARATOR) + DataAccess.SEPARATOR.length();
+    	int bucketEnd = driverEnd + location.substring(driverEnd).indexOf("/");
+    	return location.substring(0,bucketEnd) + ":" + location.substring(location.lastIndexOf("/") + 1);
+    }
+    
+    public static void deleteTempFile(DataFile dataFile, Dataset dataset, IngestServiceBean ingestService) {
+    	logger.info("Deleting " + dataFile.getStorageIdentifier());
+    	// Before we remove the file from the list and forget about 
+    	// it:
+    	// The physical uploaded file is still sitting in the temporary
+    	// directory. If it were saved, it would be moved into its 
+    	// permanent location. But since the user chose not to save it,
+    	// we have to delete the temp file too. 
+    	// 
+    	// Eventually, we will likely add a dedicated mechanism
+    	// for managing temp files, similar to (or part of) the storage 
+    	// access framework, that would allow us to handle specialized
+    	// configurations - highly sensitive/private data, that 
+    	// has to be kept encrypted even in temp files, and such. 
+    	// But for now, we just delete the file directly on the 
+    	// local filesystem: 
+
+    	try {
+    		List<Path> generatedTempFiles = ingestService.listGeneratedTempFiles(
+    				Paths.get(getFilesTempDirectory()), dataFile.getStorageIdentifier());
+    		if (generatedTempFiles != null) {
+    			for (Path generated : generatedTempFiles) {
+    				logger.fine("(Deleting generated thumbnail file " + generated.toString() + ")");
+    				try {
+    					Files.delete(generated);
+    				} catch (IOException ioex) {
+    					logger.warning("Failed to delete generated file " + generated.toString());
+    				}
+    			}
+    		}
+    		String si = dataFile.getStorageIdentifier();
+    		if (si.contains(DataAccess.SEPARATOR)) {
+    			//Direct upload files will already have a store id in their storageidentifier
+    			//but they need to be associated with a dataset for the overall storagelocation to be calculated
+    			//so we temporarily set the owner
+    			if(dataFile.getOwner()!=null) {
+    				logger.warning("Datafile owner was not null as expected");
+    			}
+    			dataFile.setOwner(dataset);
+    			//Use one StorageIO to get the storageLocation and then create a direct storage storageIO class to perform the delete 
+    			// (since delete is forbidden except for direct storage)
+    			String sl = DataAccess.getStorageIO(dataFile).getStorageLocation();
+    			DataAccess.getDirectStorageIO(sl).delete();
+    		} else {
+    			//Temp files sent to this method have no prefix, not even "tmp://"
+    			Files.delete(Paths.get(FileUtil.getFilesTempDirectory() + "/" + dataFile.getStorageIdentifier()));
+    		}
+    	} catch (IOException ioEx) {
+    		// safe to ignore - it's just a temp file. 
+    		logger.warning(ioEx.getMessage());
+    		if(dataFile.getStorageIdentifier().contains(DataAccess.SEPARATOR)) {
+    			logger.warning("Failed to delete temporary file " + dataFile.getStorageIdentifier());
+    		} else {
+    			logger.warning("Failed to delete temporary file " + FileUtil.getFilesTempDirectory() + "/"
+    					+ dataFile.getStorageIdentifier());
+    		}
+    	} finally {
+    		dataFile.setOwner(null);
+    	}
+    }
+    
+    public static boolean isFileAlreadyUploaded(DataFile dataFile, Map checksumMapNew, Map fileAlreadyExists) {
+        if (checksumMapNew == null) {
+            checksumMapNew = new HashMap<>();
+        }
+        
+        if (fileAlreadyExists == null) {
+            fileAlreadyExists = new HashMap<>();
+        }
+        
+        String chksum = dataFile.getChecksumValue();
+        
+        if (chksum == null) {
+            return false;
+        }
+        
+        if (checksumMapNew.get(chksum) != null) {
+            fileAlreadyExists.put(dataFile, checksumMapNew.get(chksum));
+            return true;
+        }
+        
+        checksumMapNew.put(chksum, dataFile);
+        return false;
+    }
+    
+    public static String formatFolderListingHtml(String folderName, DatasetVersion version, String apiLocation, boolean originals) {
+        String title = formatTitle("Index of folder /" + folderName);
+        List<FileMetadata> fileMetadatas = version.getFileMetadatasFolderListing(folderName);
+        
+        if (fileMetadatas == null || fileMetadatas.isEmpty()) {
+            return "";
+        }
+        
+        String persistentId = version.getDataset().getGlobalId().asString();
+        
+        StringBuilder sb = new StringBuilder();
+        
+        String versionTag = version.getFriendlyVersionNumber();
+        versionTag = "DRAFT".equals(versionTag) ? "Draft Version" : "v. " + versionTag;
+        sb.append(HtmlFormatUtil.formatTag("Index of folder /" + folderName + 
+                " in dataset " + persistentId + 
+                " (" + versionTag + ")", HTML_H1));
+        sb.append("\n");
+        sb.append(formatFolderListingTableHtml(folderName, fileMetadatas, apiLocation, originals));
+        
+        String body = sb.toString();
+                 
+        return formatDoc(title, body);
+    }
+    
+    private static String formatFolderListingTableHtml(String folderName, List<FileMetadata> fileMetadatas, String apiLocation, boolean originals) {
+        StringBuilder sb = new StringBuilder(); 
+        
+        sb.append(formatFolderListingTableHeaderHtml());
+        
+        for (FileMetadata fileMetadata : fileMetadatas) {
+            String localFolder = fileMetadata.getDirectoryLabel() == null ? "" : fileMetadata.getDirectoryLabel(); 
+            
+            if (folderName.equals(localFolder)) {
+                String accessUrl = getFileAccessUrl(fileMetadata, apiLocation, originals);
+                sb.append(formatFileListEntryHtml(fileMetadata, accessUrl));
+                sb.append("\n");
+
+            } else if (localFolder.startsWith(folderName)){
+                String subFolder = "".equals(folderName) ? localFolder : localFolder.substring(folderName.length() + 1);
+                if (subFolder.indexOf('/') > 0) {
+                    subFolder = subFolder.substring(0, subFolder.indexOf('/'));
+                }
+                String folderAccessUrl = getFolderAccessUrl(fileMetadata.getDatasetVersion(), folderName, subFolder, apiLocation, originals);
+                sb.append(formatFileListFolderHtml(subFolder, folderAccessUrl));
+                sb.append("\n");
+            }
+        }
+        
+        return formatTable(sb.toString());
+    }
+        
+    private static String formatFolderListingTableHeaderHtml() {
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append(HtmlFormatUtil.formatTag("Name", HTML_TABLE_HDR));
+        sb.append(HtmlFormatUtil.formatTag("Last Modified", HTML_TABLE_HDR));
+        sb.append(HtmlFormatUtil.formatTag("Size", HTML_TABLE_HDR));
+        sb.append(HtmlFormatUtil.formatTag("Description", HTML_TABLE_HDR));
+        
+        String hdr = formatTableRow(sb.toString());
+        
+        // add a separator row (again, we want it to look just like Apache index)
+        return hdr.concat(formatTableRow(HtmlFormatUtil.formatTag("<hr>", HTML_TABLE_HDR,"colspan=\"4\""))); 
+        
+    }
+    
+    private static String formatFileListEntryHtml(FileMetadata fileMetadata, String accessUrl) {
+        StringBuilder sb = new StringBuilder(); 
+        
+        String fileName = fileMetadata.getLabel();
+        String dateString =  new SimpleDateFormat(FILE_LIST_DATE_FORMAT).format(fileMetadata.getDataFile().getCreateDate()); 
+        String sizeString = fileMetadata.getDataFile().getFriendlySize();
+        
+        sb.append(formatTableCell(formatLink(fileName, accessUrl))); 
+        sb.append(formatTableCellAlignRight(dateString));
+        sb.append(formatTableCellAlignRight(sizeString));
+        sb.append(formatTableCellAlignRight("&nbsp;"));
+        
+        return formatTableRow(sb.toString());
+    }
+    
+    private static String formatFileListFolderHtml(String folderName, String listApiUrl) {
+        
+        StringBuilder sb = new StringBuilder();
+        
+        sb.append(formatTableCell(formatLink(folderName+"/", listApiUrl)));
+        sb.append(formatTableCellAlignRight(" - "));
+        sb.append(formatTableCellAlignRight(" - "));
+        sb.append(formatTableCellAlignRight("&nbsp;"));
+        
+        return formatTableRow(sb.toString());
+    }
+    
+    private static String getFileAccessUrl(FileMetadata fileMetadata, String apiLocation, boolean original) {
+        String fileId = fileMetadata.getDataFile().getId().toString();
+        
+        if (StringUtil.nonEmpty(fileMetadata.getDirectoryLabel())) {
+            fileId = fileMetadata.getDirectoryLabel().concat("/").concat(fileId);
+        }
+        
+        String formatArg = fileMetadata.getDataFile().isTabularData() && original ? "?format=original" : ""; 
+        
+        return apiLocation + "/api/access/datafile/" + fileId + formatArg; 
+    }
+    
+    private static String getFolderAccessUrl(DatasetVersion version, String currentFolder, String subFolder, String apiLocation, boolean originals) {
+        String datasetId = version.getDataset().getId().toString();
+        String versionTag = version.getFriendlyVersionNumber();
+        versionTag = versionTag.replace("DRAFT", DS_VERSION_DRAFT);
+        if (!"".equals(currentFolder)) {
+            subFolder = currentFolder + "/" + subFolder;
+        }
+        
+        return apiLocation + "/api/datasets/" + datasetId + 
+                "/dirindex/?version=" + versionTag + "&" +
+                "folder=" + subFolder + 
+                (originals ? "&original=true" : "");
+    }
+
+    /**
+     * This method takes a JsonArray of JsonObjects and extracts the fields of those
+     * objects corresponding to the supplied list of headers to create a rectangular
+     * CSV file (with headers) that lists the values from each object in rows. It
+     * was developed for use with the metrics API but could be useful in other calls
+     * that require the same transformation.
+     * 
+     * @param jsonArray
+     *            - the array of JsonObjects containing key/value pairs with keys
+     *            matching the headers. Keys that don't match a header are
+     *            ignored/not included.
+     * @param headers
+     *            - strings to use as CSV headers
+     * @return - the CSV file as a string, rows separated by '\n'
+     */
+    public static String jsonArrayOfObjectsToCSV(JsonArray jsonArray, String... headers) {
+        StringBuilder csvSB = new StringBuilder(String.join(",", headers));
+        jsonArray.forEach((jv) -> {
+            JsonObject jo = (JsonObject) jv;
+            String[] values = new String[headers.length];
+            for (int i = 0; i < headers.length; i++) {
+                if(jo.containsKey(headers[i])) {
+                    values[i] = jo.get(headers[i]).toString();
+                }
+            }
+            csvSB.append("\n").append(String.join(",", values));
+        });
+        return csvSB.toString();
+    }
+
+    public static boolean isActivelyEmbargoed(DataFile df) {
+        Embargo e = df.getEmbargo();
+        if (e != null) {
+            LocalDate endDate = e.getDateAvailable();
+            if (endDate != null && endDate.isAfter(LocalDate.now())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean isActivelyEmbargoed(FileMetadata fileMetadata) {
+        return isActivelyEmbargoed(fileMetadata.getDataFile());
+    }
+    
+    public static boolean isActivelyEmbargoed(List<FileMetadata> fmdList) {
+        for (FileMetadata fmd : fmdList) {
+            if (isActivelyEmbargoed(fmd)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
 }

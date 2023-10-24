@@ -5,6 +5,7 @@ import edu.harvard.iq.dataverse.authorization.RoleAssignee;
 import edu.harvard.iq.dataverse.authorization.groups.GroupProvider;
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
 import edu.harvard.iq.dataverse.authorization.users.User;
+import edu.harvard.iq.dataverse.engine.command.DataverseRequest;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -35,19 +36,29 @@ public class ShibGroupProvider implements GroupProvider<ShibGroup> {
     }
 
     @Override
-    public Set<ShibGroup> groupsFor(RoleAssignee ra, DvObject o) {
-        if ( ra instanceof User ) {
-            User user = (User) ra;
-            Set<ShibGroup> shibGroups = new HashSet<>();
-            if ( user instanceof AuthenticatedUser ) {
-                AuthenticatedUser authenticatedUser = (AuthenticatedUser) user;
-                Set<ShibGroup> groupsFor = shibGroupService.findFor(authenticatedUser);
-                for (ShibGroup shibGroup : groupsFor) {
-                    shibGroup.setShibGroupProvider(this);
-                }
-                return groupsFor;
+    public Set<ShibGroup> groupsFor( DataverseRequest req, DvObject dvo ) {
+        return groupsFor(req.getUser());
+    }
+    
+    @Override
+    public Set<ShibGroup> groupsFor(RoleAssignee ra, DvObject dvo) {
+        return groupsFor(ra);
+    }
+    
+    @Override
+    public Set<ShibGroup> groupsFor( DataverseRequest req) {
+        return groupsFor(req.getUser());
+    }
+    
+    @Override
+    public Set<ShibGroup> groupsFor(RoleAssignee ra) {
+        if (ra instanceof AuthenticatedUser) {
+            AuthenticatedUser authenticatedUser = (AuthenticatedUser) ra;
+            Set<ShibGroup> groupsFor = shibGroupService.findFor(authenticatedUser);
+            for (ShibGroup shibGroup : groupsFor) {
+                shibGroup.setShibGroupProvider(this);
             }
-            return shibGroups;
+            return groupsFor;
         } else {
             return Collections.emptySet();
         }

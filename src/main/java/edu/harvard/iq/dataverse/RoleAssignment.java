@@ -3,18 +3,19 @@ package edu.harvard.iq.dataverse;
 import edu.harvard.iq.dataverse.authorization.DataverseRole;
 import edu.harvard.iq.dataverse.authorization.RoleAssignee;
 import java.util.Objects;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
-import javax.persistence.Table;
-import javax.persistence.UniqueConstraint;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 /**
  * A role of a user in a Dataverse. A User may have many roles in a given Dataverse.
@@ -24,18 +25,32 @@ import javax.persistence.UniqueConstraint;
  */
 @Entity
 @Table(
-	uniqueConstraints = @UniqueConstraint(columnNames={"assigneeIdentifier","role_id","definitionPoint_id"}) )
+	uniqueConstraints = @UniqueConstraint(columnNames={"assigneeIdentifier","role_id","definitionPoint_id"})
+      , indexes = {@Index(columnList="assigneeidentifier")
+		, @Index(columnList="definitionpoint_id")
+		, @Index(columnList="role_id")}
+)
 @NamedQueries({
 	@NamedQuery( name  = "RoleAssignment.listByAssigneeIdentifier_DefinitionPointId",
 				 query = "SELECT r FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier AND r.definitionPoint.id=:definitionPointId" ),
+    	@NamedQuery( name  = "RoleAssignment.listByAssigneeIdentifier_DefinitionPointId_RoleId",
+				 query = "SELECT r FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier AND r.definitionPoint.id=:definitionPointId and r.role.id=:roleId" ),
 	@NamedQuery( name  = "RoleAssignment.listByAssigneeIdentifier",
 				 query = "SELECT r FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier" ),
+	@NamedQuery( name  = "RoleAssignment.listByAssigneeIdentifiers",
+				 query = "SELECT r FROM RoleAssignment r WHERE r.assigneeIdentifier in :assigneeIdentifiers AND r.definitionPoint.id in :definitionPointIds" ),
 	@NamedQuery( name  = "RoleAssignment.listByDefinitionPointId",
 				 query = "SELECT r FROM RoleAssignment r WHERE r.definitionPoint.id=:definitionPointId" ),
 	@NamedQuery( name  = "RoleAssignment.listByRoleId",
-				 query = "SELECT r FROM RoleAssignment r WHERE r.role=:roleId" ),
+				 query = "SELECT r FROM RoleAssignment r WHERE r.role.id=:roleId" ),
+	@NamedQuery( name  = "RoleAssignment.listByPrivateUrlToken",
+				 query = "SELECT r FROM RoleAssignment r WHERE r.privateUrlToken=:privateUrlToken" ),
 	@NamedQuery( name  = "RoleAssignment.deleteByAssigneeIdentifier_RoleIdDefinition_PointId",
-				 query = "DELETE FROM RoleAssignment r WHERE r.assigneeIdentifier=:userId AND r.role.id=:roleId AND r.definitionPoint.id=:definitionPointId"),
+				 query = "DELETE FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier AND r.role.id=:roleId AND r.definitionPoint.id=:definitionPointId"),
+        @NamedQuery( name = "RoleAssignment.deleteAllByAssigneeIdentifier",
+				 query = "DELETE FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier"),
+        @NamedQuery( name = "RoleAssignment.deleteAllByAssigneeIdentifier_Definition_PointId_RoleType",
+				 query = "DELETE FROM RoleAssignment r WHERE r.assigneeIdentifier=:assigneeIdentifier AND r.role.id=:roleId and r.definitionPoint.id=:definitionPointId")
 })
 public class RoleAssignment implements java.io.Serializable {
 	@Id
@@ -45,20 +60,32 @@ public class RoleAssignment implements java.io.Serializable {
 	@Column( nullable=false )
 	private String assigneeIdentifier;
 		
-	@ManyToOne( cascade = CascadeType.MERGE )
+	@ManyToOne( cascade = {CascadeType.MERGE} )
 	@JoinColumn( nullable=false )
 	private DataverseRole role;
 	
-	@ManyToOne( cascade = CascadeType.MERGE ) 
+	@ManyToOne( cascade = {CascadeType.MERGE} ) 
 	@JoinColumn( nullable=false )
 	private DvObject definitionPoint;
+
+    @Column(nullable = true)
+    private String privateUrlToken;
+	
+    @Column(nullable = true)
+    private Boolean privateUrlAnonymizedAccess;
 	
 	public RoleAssignment() {}
 		
-	public RoleAssignment(DataverseRole aRole, RoleAssignee anAssignee, DvObject aDefinitionPoint) {
+	public RoleAssignment(DataverseRole aRole, RoleAssignee anAssignee, DvObject aDefinitionPoint, String privateUrlToken) {
+	    this(aRole, anAssignee, aDefinitionPoint, privateUrlToken, false);
+	}
+	
+	public RoleAssignment(DataverseRole aRole, RoleAssignee anAssignee, DvObject aDefinitionPoint, String privateUrlToken, Boolean anonymizedAccess) {
         role = aRole;
         assigneeIdentifier = anAssignee.getIdentifier();
         definitionPoint = aDefinitionPoint;
+        this.privateUrlToken = privateUrlToken;
+        this.privateUrlAnonymizedAccess=anonymizedAccess;
     }
 	
 	public Long getId() {
@@ -92,7 +119,15 @@ public class RoleAssignment implements java.io.Serializable {
 	public void setDefinitionPoint(DvObject definitionPoint) {
 		this.definitionPoint = definitionPoint;
 	}
-	
+
+    public String getPrivateUrlToken() {
+        return privateUrlToken;
+    }
+
+    public boolean isAnonymizedAccess(){
+        return (privateUrlAnonymizedAccess==null) ? false: privateUrlAnonymizedAccess;
+    }
+
 	@Override
 	public int hashCode() {
 		int hash = 7;

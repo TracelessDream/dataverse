@@ -6,25 +6,26 @@
 
 package edu.harvard.iq.dataverse;
 
+import com.google.gson.annotations.Expose;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToMany;
-import javax.persistence.ManyToOne;
-import javax.persistence.Table;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToMany;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 
 /**
  *
  * @author Leonid Andreev
  */
+
 
 @Entity
 @Table(indexes = {@Index(columnList="dataset_id")})
@@ -58,6 +59,7 @@ public class DataFileCategory implements Serializable {
         this.dataset = dataset;
     }
     
+    @Expose
     @Column( nullable = false )
     private String name;
     
@@ -72,7 +74,7 @@ public class DataFileCategory implements Serializable {
     /* 
      * DataFiles which belong to this category: 
      */
-    @ManyToMany (mappedBy="fileCategories", cascade = {CascadeType.REMOVE})
+    @ManyToMany (mappedBy="fileCategories")
     private Collection<FileMetadata> fileMetadatas = null; 
     
     public Collection<FileMetadata> getFileMetadatas() {

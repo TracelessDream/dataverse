@@ -6,13 +6,12 @@
       xmlns:p="http://primefaces.org/ui"
       xmlns:c="http://xmlns.jcp.org/jsp/jstl/core"
       xmlns:jsf="http://xmlns.jcp.org/jsf">
-
     <h:head>
     </h:head>
 
     <h:body>
         <ui:composition template="/dataverse_template.xhtml">
-            <ui:param name="pageTitle" value="#{bundle['dataverse.option.themeAndWidgets']} - #{themeWidgetFragment.editDv.name} #{bundle.dataverse}"/>
+            <ui:param name="pageTitle" value="#{bundle['dataverse.option.themeAndWidgets']} - #{themeWidgetFragment.editDv.name}"/>
             <ui:param name="dataverse" value="#{themeWidgetFragment.editDv}"/>  
            
             <ui:param name="showMessagePanel" value="#{true}"/>
@@ -23,7 +22,7 @@
                     <f:viewAction action="#{dataverseHeaderFragment.initBreadcrumbs(themeWidgetFragment.editDv, bundle['dataverse.option.themeAndWidgets'])}"/>
                 </f:metadata>
                 <h:form id="themeWidgetsForm">
-                <ui:include src="themeAndWidgetsFragment.xhtml"/>
+                    <ui:include src="themeAndWidgetsFragment.xhtml"/>
                 </h:form>
             </ui:define>
         </ui:composition>

@@ -9,14 +9,13 @@ import edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip.IpAddress
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.ejb.Stateless;
-import javax.inject.Named;
-import javax.persistence.EntityManager;
-import javax.persistence.NoResultException;
-import javax.persistence.PersistenceContext;
+import jakarta.ejb.EJB;
+import jakarta.ejb.Stateless;
+import jakarta.inject.Named;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.NoResultException;
+import jakarta.persistence.PersistenceContext;
 
 /**
  * Provides CRUD tools to efficiently manage IP groups in a Java EE container.
@@ -38,6 +37,11 @@ public class IpGroupsServiceBean {
     @EJB
     RoleAssigneeServiceBean roleAssigneeSvc;
     
+    /**
+     * Stores (inserts/updates) the passed IP group.
+     * @param grp The group to store.
+     * @return Managed version of the group. The provider might be un-set.
+     */
     public IpGroup store( IpGroup grp ) {
         ActionLogRecord alr = new ActionLogRecord(ActionLogRecord.ActionType.GlobalGroups, "ipCreate");
         if ( grp.getGroupProvider() != null ) {
@@ -57,13 +61,12 @@ public class IpGroupsServiceBean {
                     return grp;
                     
                 } else {
-                    logger.log(Level.INFO, "Updating ip group {0}", grp.getPersistedGroupAlias());
                     existing.setDescription(grp.getDescription());
-                    existing.setDisplayName( grp.getDisplayName() );
-                    existing.setIpv4Ranges( grp.getIpv4Ranges() );
-                    existing.setIpv6Ranges( grp.getIpv6Ranges() );
+                    existing.setDisplayName(grp.getDisplayName());
+                    existing.setIpv4Ranges(grp.getIpv4Ranges());
+                    existing.setIpv6Ranges(grp.getIpv6Ranges());
                     actionLogSvc.log( alr.setActionSubType("ipUpdate") );
-                    return em.merge(existing);
+                    return existing;
                 }
             } else {
                 actionLogSvc.log( alr );
@@ -71,7 +74,7 @@ public class IpGroupsServiceBean {
                 return grp;
             }
         } else {
-             actionLogSvc.log( alr.setActionSubType("ipUpdate") );
+            actionLogSvc.log( alr.setActionSubType("ipUpdate") );
             return em.merge(grp);
         }
     }
@@ -91,16 +94,16 @@ public class IpGroupsServiceBean {
     }
     
     public List<IpGroup> findAll() {
-        return em.createNamedQuery("IpGroup.findAll").getResultList();
+        return em.createNamedQuery("IpGroup.findAll", IpGroup.class).getResultList();
     }
     
     public Set<IpGroup> findAllIncludingIp( IpAddress ipa ) {
         if ( ipa instanceof IPv4Address ) {
             IPv4Address ip4 = (IPv4Address) ipa;
             List<IpGroup> groupList = em.createNamedQuery("IPv4Range.findGroupsContainingAddressAsLong", IpGroup.class)
-                    .setParameter("addressAsLong", ip4.toLong()).getResultList();
+                    .setParameter("addressAsLong", ip4.toBigInteger()).getResultList();
             return new HashSet<>(groupList);
-            
+
         } else if ( ipa instanceof IPv6Address ) {
             IPv6Address ip6 = (IPv6Address) ipa;
             long[] ip6arr = ip6.toLongArray();
@@ -111,7 +114,7 @@ public class IpGroupsServiceBean {
                     .setParameter("d", ip6arr[3])
                     .getResultList();
             return new HashSet<>(groupList);
-            
+
         } else {
             throw new IllegalArgumentException( "Unknown IpAddress type: " + ipa.getClass() + " (for IpAddress:" + ipa + ")" );
         }

@@ -5,6 +5,7 @@ import edu.harvard.iq.dataverse.authorization.RoleAssigneeDisplayInfo;
 import edu.harvard.iq.dataverse.authorization.groups.Group;
 import edu.harvard.iq.dataverse.authorization.groups.GroupProvider;
 import edu.harvard.iq.dataverse.authorization.users.User;
+import edu.harvard.iq.dataverse.engine.command.DataverseRequest;
 
 /**
  * A group containing all the users in the system - including the guest user.
@@ -21,6 +22,8 @@ public final class AllUsers implements Group {
        
     private final String identifier = ":AllUsers";
     
+    private final String displayInfo = "Everyone (including guests)";
+    
     public static final AllUsers get() { return instance; }
     
     /**
@@ -29,8 +32,8 @@ public final class AllUsers implements Group {
     private AllUsers() {}
         
     @Override
-    public boolean contains(RoleAssignee ra) {
-        return (ra instanceof User);
+    public boolean contains(DataverseRequest ra) {
+        return (ra.getUser() instanceof User);
     }
 
     @Override
@@ -50,7 +53,7 @@ public final class AllUsers implements Group {
 
     @Override
     public RoleAssigneeDisplayInfo getDisplayInfo() {
-        return new RoleAssigneeDisplayInfo("Everyone (including guests)", null);
+        return new RoleAssigneeDisplayInfo(displayInfo, null);
     }
 
     @Override
@@ -72,4 +75,5 @@ public final class AllUsers implements Group {
     public String toString() {
         return "[AllUsers " + getIdentifier() + "]";
     }
+    
 }

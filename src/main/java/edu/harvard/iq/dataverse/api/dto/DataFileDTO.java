@@ -9,17 +9,27 @@ import java.util.List;
  * @author ellenk
  */
 public class DataFileDTO {
-    private String fileName;
     private String id;
-    private String name;
+    private String storageIdentifier; 
     private String contentType;
+    private Long filesize;
     private String filename;
     private String originalFileFormat;
     private String originalFormatLabel;
     private String UNF;
     private String md5;
     private String description;
-    private List<DataTableDTO> dataTables = new ArrayList();
+    private String pidURL;
+
+    public String getPidURL() {
+        return pidURL;
+    }
+
+    public void setPidURL(String pidURL) {
+        this.pidURL = pidURL;
+    }
+    
+    private List<DataTableDTO> dataTables = new ArrayList<>();
 
     public List<DataTableDTO> getDataTables() {
         return dataTables;
@@ -29,14 +39,14 @@ public class DataFileDTO {
         this.dataTables = dataTables;
     }
 
-    public String getFileName() {
-        return fileName;
+    public String getStorageIdentifier() {
+        return storageIdentifier;
     }
 
-    public void setFileName(String fileName) {
-        this.fileName = fileName;
+    public void setStorageIdentifier(String storageIdentifier) {
+        this.storageIdentifier = storageIdentifier;
     }
-
+    
     public String getId() {
         return id;
     }
@@ -45,20 +55,20 @@ public class DataFileDTO {
         this.id = id;
     }
 
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
     public String getContentType() {
         return contentType;
     }
 
     public void setContentType(String contentType) {
         this.contentType = contentType;
+    }
+    
+    public Long getFileSize() {
+        return filesize;
+    }
+
+    public void setFileSize(Long fileSize) {
+        this.filesize = fileSize;
     }
 
     public String getFilename() {

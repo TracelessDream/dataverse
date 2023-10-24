@@ -1,6 +1,9 @@
 package edu.harvard.iq.dataverse.api;
 
+import edu.harvard.iq.dataverse.Dataverse;
+import edu.harvard.iq.dataverse.UserNotification;
 import edu.harvard.iq.dataverse.actionlogging.ActionLogRecord;
+import edu.harvard.iq.dataverse.api.auth.ApiKeyAuthMechanism;
 import edu.harvard.iq.dataverse.authorization.UserRecordIdentifier;
 import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinAuthenticationProvider;
 import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinUser;
@@ -8,23 +11,24 @@ import edu.harvard.iq.dataverse.authorization.providers.builtin.BuiltinUserServi
 import edu.harvard.iq.dataverse.authorization.providers.builtin.PasswordEncryption;
 import edu.harvard.iq.dataverse.authorization.users.ApiToken;
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
-import static edu.harvard.iq.dataverse.util.json.JsonPrinter.json;
+import edu.harvard.iq.dataverse.settings.SettingsServiceBean;
 import java.sql.Timestamp;
-import java.util.Calendar;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.ejb.EJBException;
-import javax.json.Json;
-import javax.json.JsonArrayBuilder;
-import javax.json.JsonObjectBuilder;
-import javax.ws.rs.GET;
-import javax.ws.rs.POST;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.Response.Status;
+import jakarta.ejb.EJB;
+import jakarta.ejb.EJBException;
+import jakarta.json.Json;
+import jakarta.json.JsonObjectBuilder;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status;
+import java.util.Date;
+import static edu.harvard.iq.dataverse.util.json.JsonPrinter.json;
+import static edu.harvard.iq.dataverse.util.json.JsonPrinter.json;
 
 /**
  * REST API bean for managing {@link BuiltinUser}s.
@@ -42,27 +46,20 @@ public class BuiltinUsers extends AbstractApiBean {
     protected BuiltinUserServiceBean builtinUserSvc;
 
     @GET
-    public Response list(@QueryParam("key") String key) {
-        String expectedKey = settingsSvc.get(API_KEY_IN_SETTINGS);
-        if (expectedKey == null) {
-            return errorResponse(Status.SERVICE_UNAVAILABLE, "Dataverse config issue: No API key defined for built in user management");
-        }
-        if (!expectedKey.equals(key)) {
-            return badApiKey(key);
-        }
-        JsonArrayBuilder bld = Json.createArrayBuilder();
-
-        for (BuiltinUser u : builtinUserSvc.findAll()) {
-            bld.add(json(u));
-        }
-
-        return okResponse(bld);
-    }
-    
-    @GET
     @Path("{username}/api-token")
     public Response getApiToken( @PathParam("username") String username, @QueryParam("password") String password ) {
-        BuiltinUser u = builtinUserSvc.findByUserName( username );
+        boolean disabled = true;
+        boolean lookupAllowed = settingsSvc.isTrueForKey(SettingsServiceBean.Key.AllowApiTokenLookupViaApi, false);
+        if (lookupAllowed) {
+            disabled = false;
+        }
+        if (disabled) {
+            return error(Status.FORBIDDEN, "This API endpoint has been disabled.");
+        }
+        BuiltinUser u = null;
+
+        u = builtinUserSvc.findByUserName(username);
+
         if ( u == null ) return badRequest("Bad username or password");
         
         boolean passwordOk = PasswordEncryption.getVersion(u.getPasswordEncryptionVersion())
@@ -73,9 +70,25 @@ public class BuiltinUsers extends AbstractApiBean {
         
         ApiToken t = authSvc.findApiTokenByUser(authUser);
         
-        return (t != null ) ? okResponse(t.getTokenString()) : notFound("User " + username + " does not have an API token");
+        return (t != null ) ? ok(t.getTokenString()) : notFound("User " + username + " does not have an API token");
     }
     
+    
+    //These two endpoints take in a BuiltinUser as json. To support these endpoints
+    //with the removal of attributes from BuiltinUser in 4565, BuiltinUser supports
+    //the extended attributes as transient (not stored to the database). They are
+    //immediately used to create an AuthenticatedUser.
+    //If this proves to be too confusing, we can parse the json more manually
+    //and use the values to create BuiltinUser/AuthenticatedUser.
+    //--MAD 4.9.3
+    @POST
+    public Response save(BuiltinUser user, @QueryParam("password") String password, @QueryParam("key") String key, @QueryParam("sendEmailNotification") Boolean sendEmailNotification) {   
+        if( sendEmailNotification == null )
+            sendEmailNotification = true;
+        
+        return internalSave(user, password, key, sendEmailNotification);
+    }
+
     /**
      * Created this new API command because the save method could not be run
      * from the RestAssured API. RestAssured doesn't allow a Post request to
@@ -93,16 +106,33 @@ public class BuiltinUsers extends AbstractApiBean {
         return internalSave(user, password, key);
     }
     
+    /**
+     * Created this new endpoint to resolve issue #6915, optionally preventing 
+     * the email notification to the new user on account creation by adding 
+     * "false" as the third path parameter.
+     *
+     * @param user
+     * @param password
+     * @param key
+     * @param sendEmailNotification
+     * @return
+     */
     @POST
-    public Response save(BuiltinUser user, @QueryParam("password") String password, @QueryParam("key") String key) {
-        return internalSave(user, password, key);
+    @Path("{password}/{key}/{sendEmailNotification}")
+    public Response create(BuiltinUser user, @PathParam("password") String password, @PathParam("key") String key, @PathParam("sendEmailNotification") Boolean sendEmailNotification) {
+        return internalSave(user, password, key, sendEmailNotification);
     }
-
+    
+    // internalSave without providing an explicit "sendEmailNotification"
     private Response internalSave(BuiltinUser user, String password, String key) {
+        return internalSave(user, password, key, true);
+    }
+    
+    private Response internalSave(BuiltinUser user, String password, String key, Boolean sendEmailNotification) {
         String expectedKey = settingsSvc.get(API_KEY_IN_SETTINGS);
         
         if (expectedKey == null) {
-            return errorResponse(Status.SERVICE_UNAVAILABLE, "Dataverse config issue: No API key defined for built in user management");
+            return error(Status.SERVICE_UNAVAILABLE, "Dataverse config issue: No API key defined for built in user management");
         }
         if (!expectedKey.equals(key)) {
             return badApiKey(key);
@@ -116,54 +146,78 @@ public class BuiltinUsers extends AbstractApiBean {
                 user.updateEncryptedPassword(PasswordEncryption.get().encrypt(password), PasswordEncryption.getLatestVersionNumber());
             }
             
-            // Make sure the identifier is unique
-            if ( (builtinUserSvc.findByUserName(user.getUserName()) != null)
-                    || ( authSvc.identifierExists(user.getUserName())) ) {
-                return errorResponse(Status.BAD_REQUEST, "username '" + user.getUserName() + "' already exists");
+            // Make sure the identifier is unique, case insensitive. "DATAVERSEADMIN" is not allowed to be created if "dataverseAdmin" exists.
+            if ((builtinUserSvc.findByUserName(user.getUserName()) != null)
+                    || (authSvc.identifierExists(user.getUserName()))) {
+                return error(Status.BAD_REQUEST, "username '" + user.getUserName() + "' already exists");
             }
             user = builtinUserSvc.save(user);
 
             AuthenticatedUser au = authSvc.createAuthenticatedUser(
                     new UserRecordIdentifier(BuiltinAuthenticationProvider.PROVIDER_ID, user.getUserName()),
                     user.getUserName(), 
-                    user.getDisplayInfo(),
+                    user.getDisplayInfoForApiCreation(),
                     false);
-            ApiToken token = new ApiToken();
 
-            token.setTokenString(java.util.UUID.randomUUID().toString());
-            token.setAuthenticatedUser(au);
+            /**
+             * @todo Move this to
+             * AuthenticationServiceBean.createAuthenticatedUser
+             */
+            boolean rootDataversePresent = false;
+            try {
+                Dataverse rootDataverse = dataverseSvc.findRootDataverse();
+                if (rootDataverse != null) {
+                    rootDataversePresent = true;
+                }
+            } catch (Exception e) {
+                logger.info("The root dataverse is not present. Don't send a notification to dataverseAdmin.");
+            }
+            if (rootDataversePresent && sendEmailNotification) {
+                userNotificationSvc.sendNotification(au,
+                        new Timestamp(new Date().getTime()),
+                        UserNotification.Type.CREATEACC, null);
+            }
 
-            Calendar c = Calendar.getInstance();
-            token.setCreateTime(new Timestamp(c.getTimeInMillis()));
-            c.roll(Calendar.YEAR, 1);
-            token.setExpireTime(new Timestamp(c.getTimeInMillis()));
+            ApiToken token = authSvc.generateApiTokenForUser(au);
             authSvc.save(token);
 
             JsonObjectBuilder resp = Json.createObjectBuilder();
             resp.add("user", json(user));
+            resp.add("authenticatedUser", json(au));
             resp.add("apiToken", token.getTokenString());
             
             alr.setInfo("builtinUser:" + user.getUserName() + " authenticatedUser:" + au.getIdentifier() );
-            return okResponse(resp);
+            return ok(resp);
             
         } catch ( EJBException ejbx ) {
             alr.setActionResult(ActionLogRecord.Result.InternalError);
-            alr.setInfo( alr.getInfo() + "// " + ejbx.getMessage());
+            String errorMessage = ejbx.getCausedByException().getLocalizedMessage();
+            alr.setInfo( alr.getInfo() + "// " + errorMessage);
             if ( ejbx.getCausedByException() instanceof IllegalArgumentException ) {
-                return errorResponse(Status.BAD_REQUEST, "Bad request: can't save user. " + ejbx.getCausedByException().getMessage());
+                return error(Status.BAD_REQUEST, "Bad request: can't save user. " + errorMessage);
             } else {
                 logger.log(Level.WARNING, "Error saving user: ", ejbx);
-                return errorResponse(Status.INTERNAL_SERVER_ERROR, "Can't save user: " + ejbx.getMessage());
+                return error(Status.INTERNAL_SERVER_ERROR, "Can't save user: " + errorMessage);
             }
             
         } catch (Exception e) {
             logger.log(Level.WARNING, "Error saving user", e);
             alr.setActionResult(ActionLogRecord.Result.InternalError);
             alr.setInfo( alr.getInfo() + "// " + e.getMessage());
-            return errorResponse(Status.INTERNAL_SERVER_ERROR, "Can't save user: " + e.getMessage());
+            return error(Status.INTERNAL_SERVER_ERROR, "Can't save user: " + e.getMessage());
         } finally {
             actionLogSvc.log(alr);
         }
     }
 
+    /***
+     * This method was moved here from AbstractApiBean during the filter-based auth
+     * refactoring, in order to preserve the existing BuiltinUsers endpoints behavior.
+     *
+     * @param apiKey from request
+     * @return error Response
+     */
+    private Response badApiKey(String apiKey) {
+        return error(Status.UNAUTHORIZED, (apiKey != null) ? "Bad api key " : "Please provide a key query parameter (?key=XXX) or via the HTTP header " + ApiKeyAuthMechanism.DATAVERSE_API_KEY_REQUEST_HEADER_NAME);
+    }
 }

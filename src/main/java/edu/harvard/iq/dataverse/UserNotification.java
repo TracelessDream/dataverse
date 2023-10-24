@@ -1,20 +1,28 @@
 package edu.harvard.iq.dataverse;
 
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import edu.harvard.iq.dataverse.util.DateUtil;
+
 import java.io.Serializable;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.Enumerated;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.Table;
-import javax.persistence.Transient;
+import java.util.Set;
+import java.util.StringTokenizer;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.stream.Collectors;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 /**
  *
@@ -24,8 +32,39 @@ import javax.persistence.Transient;
 @Table(indexes = {@Index(columnList="user_id")})
 
 public class UserNotification implements Serializable {
+    // Keep in sync with list at admin/user-administration.rst
     public enum Type {
-        CREATEDV, CREATEDS, CREATEACC, MAPLAYERUPDATED, SUBMITTEDDS, RETURNEDDS, PUBLISHEDDS, REQUESTFILEACCESS, GRANTFILEACCESS, REJECTFILEACCESS
+        ASSIGNROLE, REVOKEROLE, CREATEDV, CREATEDS, CREATEACC, SUBMITTEDDS, RETURNEDDS, 
+        PUBLISHEDDS, REQUESTFILEACCESS, GRANTFILEACCESS, REJECTFILEACCESS, FILESYSTEMIMPORT, 
+        CHECKSUMIMPORT, CHECKSUMFAIL, CONFIRMEMAIL, APIGENERATED, INGESTCOMPLETED, INGESTCOMPLETEDWITHERRORS, 
+        PUBLISHFAILED_PIDREG, WORKFLOW_SUCCESS, WORKFLOW_FAILURE, STATUSUPDATED, DATASETCREATED, DATASETMENTIONED,
+        GLOBUSUPLOADCOMPLETED, GLOBUSUPLOADCOMPLETEDWITHERRORS,
+        GLOBUSDOWNLOADCOMPLETED, GLOBUSDOWNLOADCOMPLETEDWITHERRORS, REQUESTEDFILEACCESS;
+        
+        public String getDescription() {
+            return BundleUtil.getStringFromBundle("notification.typeDescription." + this.name());
+        }
+
+        public boolean hasDescription() {
+            final String description = getDescription();
+            return description != null && !description.isEmpty();
+        }
+
+        public static Set<Type> tokenizeToSet(String tokens) {
+            if (tokens == null || tokens.isEmpty()) {
+                return new HashSet<>();
+            }
+            return Collections.list(new StringTokenizer(tokens, ",")).stream()
+                .map(token -> Type.valueOf(((String) token).trim()))
+                .collect(Collectors.toSet());
+        }
+
+        public static String toStringValue(Set<Type> typesSet) {
+            if (typesSet == null || typesSet.isEmpty()) {
+                return null;
+            }
+            return String.join(",", typesSet.stream().map(x -> x.name()).collect(Collectors.toList()));
+        }
     };
     
     private static final long serialVersionUID = 1L;
@@ -37,6 +76,13 @@ public class UserNotification implements Serializable {
     @ManyToOne
     @JoinColumn( nullable = false )
     private AuthenticatedUser user;
+    @ManyToOne
+    /** Requestor now has a more general meaning of 'actor' - the person who's action is causing the emails.
+     * The original use of that was for people requesting dataset access
+     * This is also now used for DATASETCREATED messages where it indicates who created the dataset
+    */
+    @JoinColumn( nullable = true )
+    private AuthenticatedUser requestor;
     private Timestamp sendDate;
     private boolean readNotification;
     
@@ -44,9 +90,15 @@ public class UserNotification implements Serializable {
     @Column( nullable = false )
     private Type type;
     private Long objectId;
+    
+    private String additionalInfo;
 
     @Transient
     private boolean displayAsRead;
+    
+    @Transient 
+    String roleString;
+
     private boolean emailed;
 
     public Long getId() {
@@ -64,9 +116,21 @@ public class UserNotification implements Serializable {
     public void setUser(AuthenticatedUser user) {
         this.user = user;
     }
+        
+    public AuthenticatedUser getRequestor() {
+        return requestor;
+    }
+
+    public void setRequestor(AuthenticatedUser requestor) {
+        this.requestor = requestor;
+    }
 
     public String getSendDate() {
         return new SimpleDateFormat("MMMM d, yyyy h:mm a z").format(sendDate);
+    }
+
+    public Timestamp getSendDateTimestamp() {
+        return sendDate;
     }
 
     public void setSendDate(Timestamp sendDate) {
@@ -107,6 +171,7 @@ public class UserNotification implements Serializable {
     public void setTheObject(Object theObject) {
         this.theObject = theObject;
     }
+    
         
     public boolean isDisplayAsRead() {
         return displayAsRead;
@@ -122,5 +187,25 @@ public class UserNotification implements Serializable {
 
     public void setEmailed(boolean emailed) {
         this.emailed = emailed;
-    }        
+    }    
+    
+    public String getRoleString() {
+        return roleString;
+    }
+
+    public void setRoleString(String roleString) {
+        this.roleString = roleString;
+    }
+
+    public String getLocaleSendDate() {
+        return DateUtil.formatDate(sendDate);
+    }
+
+    public String getAdditionalInfo() {
+        return additionalInfo;
+    }
+
+    public void setAdditionalInfo(String additionalInfo) {
+        this.additionalInfo = additionalInfo;
+    }
 }

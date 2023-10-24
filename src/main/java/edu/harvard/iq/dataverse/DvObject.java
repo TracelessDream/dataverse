@@ -1,10 +1,17 @@
 package edu.harvard.iq.dataverse;
 
 import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
+import edu.harvard.iq.dataverse.pidproviders.PidUtil;
+
 import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.Objects;
-import javax.persistence.*;
+import java.util.Set;
+import java.util.logging.Logger;
+
+import jakarta.persistence.*;
 
 /**
  * Base of the object hierarchy for "anything that can be inside a dataverse".
@@ -16,8 +23,26 @@ import javax.persistence.*;
             query = "SELECT o FROM DvObject o ORDER BY o.id"),
     @NamedQuery(name = "DvObject.findById",
             query = "SELECT o FROM DvObject o WHERE o.id=:id"),
-	@NamedQuery(name = "DvObject.ownedObjectsById",
-			query="SELECT COUNT(obj) FROM DvObject obj WHERE obj.owner.id=:id")
+    @NamedQuery(name = "DvObject.checkExists", 
+            query = "SELECT count(o) from DvObject o WHERE o.id=:id"),
+    @NamedQuery(name = "DvObject.ownedObjectsById",
+			query="SELECT COUNT(obj) FROM DvObject obj WHERE obj.owner.id=:id"),
+    @NamedQuery(name = "DvObject.findByGlobalId",
+            query = "SELECT o FROM DvObject o WHERE o.identifier=:identifier and o.authority=:authority and o.protocol=:protocol and o.dtype=:dtype"),
+    @NamedQuery(name = "DvObject.findIdByGlobalId",
+            query = "SELECT o.id FROM DvObject o WHERE o.identifier=:identifier and o.authority=:authority and o.protocol=:protocol and o.dtype=:dtype"),
+
+    @NamedQuery(name = "DvObject.findByAlternativeGlobalId",
+            query = "SELECT o FROM DvObject o, AlternativePersistentIdentifier a  WHERE o.id = a.dvObject.id and a.identifier=:identifier and a.authority=:authority and a.protocol=:protocol and o.dtype=:dtype"),
+    @NamedQuery(name = "DvObject.findIdByAlternativeGlobalId",
+            query = "SELECT o.id FROM DvObject o, AlternativePersistentIdentifier a  WHERE o.id = a.dvObject.id and a.identifier=:identifier and a.authority=:authority and a.protocol=:protocol and o.dtype=:dtype"),
+
+    @NamedQuery(name = "DvObject.findByProtocolIdentifierAuthority",
+            query = "SELECT o FROM DvObject o WHERE o.identifier=:identifier and o.authority=:authority and o.protocol=:protocol"),
+    @NamedQuery(name = "DvObject.findByOwnerId", 
+                query = "SELECT o FROM DvObject o WHERE o.owner.id=:ownerId  order by o.dtype desc, o.id"),
+    @NamedQuery(name = "DvObject.findByAuthenticatedUserId", 
+                query = "SELECT o FROM DvObject o WHERE o.creator.id=:ownerId or o.releaseUser.id=:releaseUserId")
 })
 @Entity
 // Inheritance strategy "JOINED" will create 4 db tables - 
@@ -26,8 +51,26 @@ import javax.persistence.*;
 // in the child tables. (i.e., the id sequences will be "sparse" in the 3 
 // child tables). Tested, appears to be working properly. -- L.A. Nov. 4 2014
 @Inheritance(strategy=InheritanceType.JOINED)
-@Table(indexes = {@Index(columnList="owner_id"),@Index(columnList="creator_id"),@Index(columnList="releaseuser_id")})
-public abstract class DvObject implements java.io.Serializable {
+@Table(indexes = {@Index(columnList="dtype")
+		, @Index(columnList="owner_id")
+		, @Index(columnList="creator_id")
+		, @Index(columnList="releaseuser_id")},
+		uniqueConstraints = {@UniqueConstraint(columnNames = {"authority,protocol,identifier"}),@UniqueConstraint(columnNames = {"owner_id,storageidentifier"})})
+public abstract class DvObject extends DataverseEntity implements java.io.Serializable {
+    
+    private static final Logger logger = Logger.getLogger(DvObject.class.getCanonicalName());
+    
+    public enum DType {
+        Dataverse("Dataverse"), Dataset("Dataset"),DataFile("DataFile");
+       
+        String dtype;
+        DType(String dt) {
+           dtype = dt;
+        }
+        public String getDType() {
+           return dtype;
+        } 
+     }
     
     public static final Visitor<String> NamePrinter = new Visitor<String>(){
 
@@ -55,12 +98,12 @@ public abstract class DvObject implements java.io.Serializable {
 
         @Override
         public String visit(Dataset ds) {
-            return "[" + ds.getId() + " " + ds.getLatestVersion().getTitle() + "]";
+            return "[" + ds.getId() + (ds.getLatestVersion() != null ? " " + ds.getLatestVersion().getTitle() : "") + "]";
         }
 
         @Override
         public String visit(DataFile df) {
-            return "[" + df.getId() + " " + df.getFileMetadata().getLabel() + "]";
+            return "[" + df.getId() + (df.getFileMetadata() != null ? " " + df.getFileMetadata().getLabel() : "") + "]";
         }
     };
     
@@ -68,7 +111,7 @@ public abstract class DvObject implements java.io.Serializable {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(cascade = CascadeType.MERGE)
+    @ManyToOne
     private DvObject owner;
 
     private Timestamp publicationDate;
@@ -89,14 +132,58 @@ public abstract class DvObject implements java.io.Serializable {
      */
     private Timestamp indexTime;
 
-    /**
-     * @todo Make this nullable=true. Currently we can't because the
-     * CreateDataverseCommand saves the dataverse before it assigns a role.
-     */
     @Column(nullable = true)
     private Timestamp permissionModificationTime;
 
     private Timestamp permissionIndexTime;
+    
+    @Column
+    private String storageIdentifier;
+    
+    @Column(insertable = false, updatable = false) private String dtype;
+    
+    /*
+    * Add DOI related fields
+    */
+   
+    private String protocol;
+    private String authority;
+
+    @Temporal(value = TemporalType.TIMESTAMP)
+    private Date globalIdCreateTime;
+
+    private String identifier;
+    
+    private boolean identifierRegistered;
+    
+    private transient GlobalId globalId = null;
+    
+    @OneToMany(mappedBy = "dvObject", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<AlternativePersistentIdentifier> alternativePersistentIndentifiers;
+
+    public Set<AlternativePersistentIdentifier> getAlternativePersistentIndentifiers() {
+        return alternativePersistentIndentifiers;
+    }
+
+    public void setAlternativePersistentIndentifiers(Set<AlternativePersistentIdentifier> alternativePersistentIndentifiers) {
+        this.alternativePersistentIndentifiers = alternativePersistentIndentifiers;
+    }
+        
+    
+    /**
+     * previewImageAvailable could also be thought of as "thumbnail has been
+     * generated. However, were all three thumbnails generated? We might need a
+     * boolean per thumbnail size.
+     */
+    private boolean previewImageAvailable;
+    
+    public boolean isPreviewImageAvailable() {
+        return previewImageAvailable;
+    }
+    
+    public void setPreviewImageAvailable(boolean status) {
+        this.previewImageAvailable = status;
+    }
 
     public Timestamp getModificationTime() {
         return modificationTime;
@@ -197,6 +284,73 @@ public abstract class DvObject implements java.io.Serializable {
         this.creator = creator;
     }
     
+     public String getProtocol() {
+        return protocol;
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+        //Remove cached value
+        globalId=null;
+    }
+
+    public String getAuthority() {
+        return authority;
+    }
+
+    public void setAuthority(String authority) {
+        this.authority = authority;
+        //Remove cached value
+        globalId=null;
+    }
+
+    public Date getGlobalIdCreateTime() {
+        return globalIdCreateTime;
+    }
+
+    public void setGlobalIdCreateTime(Date globalIdCreateTime) {
+        this.globalIdCreateTime = globalIdCreateTime;
+    }
+
+    public String getIdentifier() {
+        return identifier;
+    }
+
+    public void setIdentifier(String identifier) {
+        this.identifier = identifier;
+        //Remove cached value
+        globalId=null;
+    }
+
+    public boolean isIdentifierRegistered() {
+        return identifierRegistered;
+    } 
+
+    public void setIdentifierRegistered(boolean identifierRegistered) {
+        this.identifierRegistered = identifierRegistered;
+    }  
+    
+    public void setGlobalId( GlobalId pid ) {
+        if ( pid == null ) {
+            setProtocol(null);
+            setAuthority(null);
+            setIdentifier(null);
+        } else {
+            //These reset globalId=null
+            setProtocol(pid.getProtocol());
+            setAuthority(pid.getAuthority());
+            setIdentifier(pid.getIdentifier());
+        }
+    }
+    
+    public GlobalId getGlobalId() {
+        // Cache this
+        if ((globalId == null) && !(getProtocol() == null || getAuthority() == null || getIdentifier() == null)) {
+            globalId = PidUtil.parseAsGlobalID(getProtocol(), getAuthority(), getIdentifier());
+        }
+        return globalId;
+    }
+    
     public abstract <T> T accept(Visitor<T> v);
 
     @Override
@@ -224,6 +378,8 @@ public abstract class DvObject implements java.io.Serializable {
     }
     
     public abstract String getDisplayName();
+    
+    public abstract String getCurrentName();
     
     // helper method used to mimic instanceof on JSF pge
     public boolean isInstanceofDataverse() {
@@ -262,7 +418,52 @@ public abstract class DvObject implements java.io.Serializable {
         }
         
         return null;
-    }    
+    }
+    
+    public String getAuthorString(){
+        if (this instanceof Dataverse){
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
+        if (this instanceof Dataset){
+            Dataset dataset = (Dataset) this;
+            return dataset.getLatestVersion().getAuthorsStr();
+        }
+        if (this instanceof DataFile){
+            Dataset dataset = (Dataset) this.getOwner();
+            return dataset.getLatestVersion().getAuthorsStr();
+        }
+        throw new UnsupportedOperationException("Not supported yet. New DVObject Instance?");
+    }
+    
+    public String getTargetUrl(){
+        throw new UnsupportedOperationException("Not supported yet. New DVObject Instance?");
+    }
+    
+    public String getYearPublishedCreated(){
+        //if published get the year if draft get when created
+        if (this.isReleased()){
+            return new SimpleDateFormat("yyyy").format(this.getPublicationDate());
+        } else if (this.getCreateDate() != null) {
+           return  new SimpleDateFormat("yyyy").format(this.getCreateDate());
+        } else {
+            return new SimpleDateFormat("yyyy").format(new Date());
+        }
+    }
+    
+    public String getStorageIdentifier() {
+        return storageIdentifier;
+    }
+    
+    public void setStorageIdentifier(String storageIdentifier) {
+        this.storageIdentifier = storageIdentifier;
+    }
+    
+    /**
+     * 
+     * @param other 
+     * @return {@code true} iff {@code other} is {@code this} or below {@code this} in the containment hierarchy.
+     */
+    public abstract boolean isAncestorOf( DvObject other );
     
     @OneToMany(mappedBy = "definitionPoint",cascade={ CascadeType.REMOVE, CascadeType.MERGE,CascadeType.PERSIST}, orphanRemoval=true)
     List<RoleAssignment> roleAssignments;

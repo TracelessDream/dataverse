@@ -12,11 +12,13 @@ import java.util.Map;
 public class DatasetVersionDTO {
     String archiveNote;
     String deacessionLink;
+    // FIXME: Change to versionNumberMajor and versionNumberMinor? Some partial renaming of "minor" was done.
     Long versionNumber;
-    String minorVersionNumber;
+    Long versionMinorNumber;
     long id;
     VersionState versionState;
     String releaseDate;
+    String releaseTime;
     String lastUpdateTime;
     String createTime;
     String archiveTime;
@@ -35,11 +37,15 @@ public class DatasetVersionDTO {
     String availabilityStatus;
     String contactForAccess;
     String sizeOfCollection;
-    String studyCompletion; 
+    String studyCompletion;
+    boolean fileAccessRequest;
+    String citation;
+    LicenseDTO license;
     boolean inReview;
     
     Map<String,MetadataBlockDTO> metadataBlocks;
     List<FileMetadataDTO> fileMetadatas;
+    List<FileDTO> files;
 
     public boolean isInReview() {
         return inReview;
@@ -168,6 +174,22 @@ public class DatasetVersionDTO {
     public void setStudyCompletion(String studyCompletion) {
         this.studyCompletion = studyCompletion;
     }
+    
+    public boolean isFileAccessRequest() {
+    	return fileAccessRequest;
+    }
+    
+    public void setFileAccessRequest(boolean fileAccessRequest) {
+    	this.fileAccessRequest = fileAccessRequest;
+    }
+    
+    public String getCitation() {
+        return citation;
+    }
+
+    public void setCitation(String citation) {
+        this.citation = citation;
+    }
 
     public String getUNF() {
         return UNF;
@@ -185,8 +207,14 @@ public class DatasetVersionDTO {
         this.fileMetadatas = fileMetadatas;
     }
 
-    
-    
+    public List<FileDTO> getFiles() {
+        return files;
+    }
+
+    public void setFiles(List<FileDTO> files) {
+        this.files = files;
+    }
+
     public String getArchiveNote() {
         return archiveNote;
     }
@@ -211,12 +239,12 @@ public class DatasetVersionDTO {
         this.versionNumber = versionNumber;
     }
 
-    public String getMinorVersionNumber() {
-        return minorVersionNumber;
+    public Long getMinorVersionNumber() {
+        return versionMinorNumber;
     }
 
-    public void setMinorVersionNumber(String minorVersionNumber) {
-        this.minorVersionNumber = minorVersionNumber;
+    public void setMinorVersionNumber(Long minorVersionNumber) {
+        this.versionMinorNumber = minorVersionNumber;
     }
 
     public long getId() {
@@ -244,6 +272,15 @@ public class DatasetVersionDTO {
     public void setReleaseDate(String releaseDate) {
         this.releaseDate = releaseDate;
     }
+    
+    
+    public String getReleaseTime() {
+        return releaseTime;
+    }
+
+    public void setReleaseTime(String releaseTime) {
+        this.releaseTime = releaseTime;
+    }
 
     public String getLastUpdateTime() {
         return lastUpdateTime;
@@ -269,6 +306,14 @@ public class DatasetVersionDTO {
         this.archiveTime = archiveTime;
     }
 
+    public LicenseDTO getLicense() {
+        return license;
+    }
+
+    public void setLicense(LicenseDTO license) {
+        this.license = license;
+    }
+
     public Map<String, MetadataBlockDTO> getMetadataBlocks() {
         return metadataBlocks;
     }
@@ -285,7 +330,7 @@ public class DatasetVersionDTO {
 
     @Override
     public String toString() {
-        return "DatasetVersionDTO{" + "archiveNote=" + archiveNote + ", deacessionLink=" + deacessionLink + ", versionNumber=" + versionNumber + ", minorVersionNumber=" + minorVersionNumber + ", id=" + id + ", versionState=" + versionState + ", releaseDate=" + releaseDate + ", lastUpdateTime=" + lastUpdateTime + ", createTime=" + createTime + ", archiveTime=" + archiveTime + ", UNF=" + UNF + ", metadataBlocks=" + metadataBlocks + ", fileMetadatas=" + fileMetadatas + '}';
+        return "DatasetVersionDTO{" + "archiveNote=" + archiveNote + ", deacessionLink=" + deacessionLink + ", versionNumber=" + versionNumber + ", minorVersionNumber=" + versionMinorNumber + ", id=" + id + ", versionState=" + versionState + ", releaseDate=" + releaseDate + ", lastUpdateTime=" + lastUpdateTime + ", createTime=" + createTime + ", archiveTime=" + archiveTime + ", UNF=" + UNF + ", metadataBlocks=" + metadataBlocks + ", fileMetadatas=" + fileMetadatas + '}';
     }
     
     

@@ -7,12 +7,14 @@
 package edu.harvard.iq.dataverse.api.imports;
 
 import java.io.Serializable;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -24,7 +26,7 @@ import javax.persistence.NamedQuery;
         @NamedQuery( name="CustomFieldMap.findByTemplateField",
                      query="SELECT cfm FROM CustomFieldMap cfm WHERE cfm.sourceTemplate=:template and cfm.sourceDatasetField =:field")
 )
-
+@Table(indexes = {@Index(columnList="sourcedatasetfield"), @Index(columnList="sourcetemplate")})
 public class CustomFieldMap implements Serializable {
 
     private static final long serialVersionUID = 1L;

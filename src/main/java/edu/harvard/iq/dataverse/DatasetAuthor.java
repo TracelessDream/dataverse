@@ -8,12 +8,10 @@ package edu.harvard.iq.dataverse;
 
 import java.util.Comparator;
 
-
 /**
  *
  * @author skraffmiller
  */
-
 public class DatasetAuthor {
        
     public static Comparator<DatasetAuthor> DisplayOrder = new Comparator<DatasetAuthor>(){
@@ -60,7 +58,11 @@ public class DatasetAuthor {
     private String idType;
 
     public String getIdType() {
-        return idType;
+        if ((this.idType == null || this.idType.isEmpty()) && (this.idValue != null && !this.idValue.isEmpty())){
+            return ("ORCID");
+        } else {
+            return idType;
+        }        
     }
 
     public void setIdType(String idType) {
@@ -76,11 +78,6 @@ public class DatasetAuthor {
 
     public void setIdValue(String idValue) {
         this.idValue = idValue;
-        if (!this.idValue.isEmpty()){
-            setIdType("ORCID");
-        } else {
-            setIdType("");
-        }
     }
 
     public boolean isEmpty() {
@@ -88,5 +85,24 @@ public class DatasetAuthor {
             && (name==null || name.getValue().trim().equals(""))
            );
     }
-    
+
+    public String getIdentifierAsUrl() {
+        if (idType != null && !idType.isEmpty() && idValue != null && !idValue.isEmpty()) {
+            return getIdentifierAsUrl(idType, idValue);
+        }
+        return null;
+    }
+
+    public static String getIdentifierAsUrl(String idType, String idValue) {
+        if (idType != null && !idType.isEmpty() && idValue != null && !idValue.isEmpty()) {
+            try {
+              ExternalIdentifier externalIdentifier = ExternalIdentifier.valueOf(idType);
+              if (externalIdentifier.isValidIdentifier(idValue))
+                return externalIdentifier.format(idValue);
+            } catch (Exception e) {
+                // non registered identifier
+            }
+        }
+        return null;
+    }
 }

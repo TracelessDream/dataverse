@@ -1,19 +1,23 @@
 package edu.harvard.iq.dataverse;
 
+import edu.harvard.iq.dataverse.search.SolrField;
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import edu.harvard.iq.dataverse.util.json.JsonLDTerm;
+
 import java.util.Collection;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import javax.faces.model.SelectItem;
-import javax.persistence.*;
+import java.util.MissingResourceException;
+import jakarta.faces.model.SelectItem;
+import jakarta.persistence.*;
 
 /**
- *
+ * Defines the meaning and constraints of a metadata field and its values.
  * @author Stephen Kraffmiller
  */
 @NamedQueries({
@@ -28,6 +32,9 @@ import javax.persistence.*;
 @Table(indexes = {@Index(columnList="metadatablock_id"),@Index(columnList="parentdatasetfieldtype_id")})
 public class DatasetFieldType implements Serializable, Comparable<DatasetFieldType> {
 
+    /**
+     * The set of possible metatypes of the field. Used for validation and layout.
+     */
     public enum FieldType {
         TEXT, TEXTBOX, DATE, EMAIL, URL, FLOAT, INT, NONE
     };    
@@ -43,23 +50,42 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     public void setId(Long id) {
         this.id = id;
     }
-    
-    public String getIdString(){
-        return id.toString();
-    }
 
-    @Column(name = "name", columnDefinition = "TEXT", nullable = false)
-    private String name;    // This is the internal, DDI-like name, no spaces, etc.
+
+    /**
+     * The internal, DDI-like name, no spaces, etc.
+     */
+    @Column(name = "name", columnDefinition = "TEXT", nullable = false, unique=true)
+    private String name;
+
+    /**
+     * A longer, human-friendlier name. Punctuation allowed.
+     */
     @Column(name = "title", columnDefinition = "TEXT")
-    private String title;   // A longer, human-friendlier name - punctuation allowed
+    private String title;
+
+    /**
+     * A user-friendly Description; will be used for
+     * mouse-overs, etc.
+     */
     @Column(name = "description", columnDefinition = "TEXT")
-    private String description; // A user-friendly Description; will be used for 
-    // mouse-overs, etc. 
+    private String description;
+    /**
+     * Metatype of the field.
+     */
     @Enumerated(EnumType.STRING)
     @Column( nullable=false )
     private FieldType fieldType;
+    /**
+     * Whether the value must be taken from a controlled vocabulary.
+     */
     private boolean allowControlledVocabulary;
+    /**
+     * A watermark to be displayed in the UI.
+     */
     private String watermark;
+    
+    private String validationFormat;
 
     @OneToMany(mappedBy = "datasetFieldType")
     private Set<DataverseFacet> dataverseFacets;
@@ -115,8 +141,11 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     
     public DatasetFieldType() {}
 
+    //For use in tests
     public DatasetFieldType(String name, FieldType fieldType, boolean allowMultiples) {
+        // use the name for both default name and title
         this.name = name;
+        this.title = name;
         this.fieldType = fieldType;
         this.allowMultiples = allowMultiples;
         childDatasetFieldTypes = new LinkedList<>();
@@ -141,8 +170,23 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
         this.displayFormat = displayFormat;
     }
     
+    public Boolean isSanitizeHtml(){
+        if (this.fieldType.equals(FieldType.URL)){
+            return true;
+        }
+        return this.fieldType.equals(FieldType.TEXTBOX);
+    }
     
-
+    public Boolean isEscapeOutputText(){
+        if (this.fieldType.equals(FieldType.URL)){
+            return false;
+        }
+        if (this.fieldType.equals(FieldType.TEXTBOX)){
+            return false;
+        }
+        return !(this.fieldType.equals(FieldType.TEXT) &&  this.displayFormat != null &&this.displayFormat.contains("<a"));
+    }
+    
     public String getName() {
         return name;
     }
@@ -175,6 +219,10 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
         this.allowControlledVocabulary = allowControlledVocabulary;
     }
 
+    /**
+     * Determines whether an instance of this field type may have multiple
+     * values.
+     */
     private boolean allowMultiples;
 
     public boolean isAllowMultiples() {
@@ -200,6 +248,9 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     public void setWatermark(String watermark) {
         this.watermark = watermark;
     }
+    /**
+     * Determines whether this field type may be used as a facet.
+     */
     private boolean facetable;
 
     public boolean isFacetable() {
@@ -209,7 +260,19 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     public void setFacetable(boolean facetable) {
         this.facetable = facetable;
     }
+    
+    public String getValidationFormat() {
+        return validationFormat;
+    }
 
+    public void setValidationFormat(String validationFormat) {
+        this.validationFormat = validationFormat;
+    }
+
+    /**
+     * Determines whether this field type is displayed in the form when creating
+     * the Dataset (or only later when editing after the initial creation).
+     */
     private boolean displayOnCreate;
 
     public boolean isDisplayOnCreate() {
@@ -224,6 +287,9 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
         return controlledVocabularyValues != null && !controlledVocabularyValues.isEmpty();
     }
 
+    /**
+     * The {@code MetadataBlock} this field type belongs to.
+     */
     @ManyToOne(cascade = CascadeType.MERGE)
     private MetadataBlock metadataBlock;
 
@@ -234,7 +300,33 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     public void setMetadataBlock(MetadataBlock metadataBlock) {
         this.metadataBlock = metadataBlock;
     }
+
+    /**
+     * A formal URI for the field used in json-ld exports
+     */
+    @Column(name = "uri", columnDefinition = "TEXT")
+    private String uri;
+
+    public String getUri() {
+    	return uri;
+    }
     
+    public JsonLDTerm getJsonLDTerm() {
+        if(uri!=null) {
+        return new JsonLDTerm(name,uri);
+        } else {
+            return new JsonLDTerm(metadataBlock.getJsonLDNamespace(), name);
+        }
+    }
+
+    public void setUri(String uri) {
+    	this.uri=uri;
+    }
+    
+    /**
+     * The list of controlled vocabulary terms that may be used as values for
+     * fields of this field type.
+     */
    @OneToMany(mappedBy = "datasetFieldType", cascade = {CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
    @OrderBy("displayOrder ASC")
     private Collection<ControlledVocabularyValue> controlledVocabularyValues;
@@ -259,8 +351,12 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
         }
         return controlledVocabularyValuesByStrValue.get(strValue);
     }
-       
 
+    /**
+     * Collection of field types that are children of this field type.
+     * A field type may consist of one or more child field types, but only one
+     * parent.
+     */
     @OneToMany(mappedBy = "parentDatasetFieldType", cascade = {CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
     @OrderBy("displayOrder ASC")
     private Collection<DatasetFieldType> childDatasetFieldTypes;
@@ -316,7 +412,10 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     public void setListValues(List<String> listValues) {
         this.listValues = listValues;
     }
-    
+    /**
+     * Determines whether fields of this field type are always required. A
+     * dataverse may set some fields required, but only if this is false.
+     */
     private boolean required;
 
     public boolean isRequired() {
@@ -390,6 +489,10 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
         return true;
     }
 
+    /**
+     * List of fields that use this field type. If this field type is removed,
+     * these fields will be removed too.
+     */
     @OneToMany(mappedBy = "datasetFieldType", cascade = {CascadeType.REMOVE, CascadeType.MERGE, CascadeType.PERSIST})
     private List<DatasetField> datasetFields;
 
@@ -419,9 +522,9 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
     
     public String getDisplayName() {
         if (isHasParent() && !parentDatasetFieldType.getTitle().equals(title)) {
-        return parentDatasetFieldType.getTitle() + " " + title;
+        return parentDatasetFieldType.getLocaleTitle()  + " " + getLocaleTitle();
         } else {
-            return title;
+            return getLocaleTitle();
         }
     }
 
@@ -449,7 +552,7 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
             
             boolean makeSolrFieldMultivalued;
             // http://stackoverflow.com/questions/5800762/what-is-the-use-of-multivalued-field-type-in-solr
-            if (allowMultiples || parentAllowsMultiplesBoolean) {
+            if (allowMultiples || parentAllowsMultiplesBoolean || isControlledVocabulary()) {
                 makeSolrFieldMultivalued = true;
             } else {
                 makeSolrFieldMultivalued = false;
@@ -465,6 +568,43 @@ public class DatasetFieldType implements Serializable, Comparable<DatasetFieldTy
             boolean makeSolrFieldMultivalued = false;
             SolrField solrField = new SolrField(oddValue, solrType, makeSolrFieldMultivalued, facetable);
             return solrField;
+        }
+    }
+
+    public String getLocaleTitle() {
+        if(getMetadataBlock()  == null) {
+            return title;
+        }
+        else {
+            try {
+                return BundleUtil.getStringFromPropertyFile("datasetfieldtype." + getName() + ".title", getMetadataBlock().getName());
+            } catch (MissingResourceException e) {
+                return title;
+            }
+        }
+    }
+
+    public String getLocaleDescription() {
+        if(getMetadataBlock()  == null) {
+            return description;
+        } else {
+            try {
+                return BundleUtil.getStringFromPropertyFile("datasetfieldtype." + getName() + ".description", getMetadataBlock().getName());
+            } catch (MissingResourceException e) {
+                return description;
+            }
+        }
+    }
+
+    public String getLocaleWatermark()    {
+        if(getMetadataBlock()  == null) {
+            return watermark;
+        } else {
+            try {
+                return BundleUtil.getStringFromPropertyFile("datasetfieldtype." + getName() + ".watermark", getMetadataBlock().getName());
+            } catch (MissingResourceException e) {
+                return watermark;
+            }
         }
     }
 

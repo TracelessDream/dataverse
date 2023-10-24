@@ -21,16 +21,15 @@ package edu.harvard.iq.dataverse.ingest.tabulardata.impl.plugins.rdata;
 
 
 import java.io.*;
-import java.io.FileReader;
 import java.io.InputStreamReader;
 import java.text.*;
 import java.util.logging.*;
 import java.util.*;
-import java.security.NoSuchAlgorithmException;
 
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 // Rosuda Wrappers and Methods for R-calls to Rserve
+import edu.harvard.iq.dataverse.settings.JvmSettings;
 import org.rosuda.REngine.REXP;
 import org.rosuda.REngine.REXPMismatchException;
 import org.rosuda.REngine.RList;
@@ -42,18 +41,14 @@ import edu.harvard.iq.dataverse.DataTable;
 import edu.harvard.iq.dataverse.datavariable.DataVariable;
 import edu.harvard.iq.dataverse.datavariable.VariableCategory;
 
-import edu.harvard.iq.dataverse.ingest.plugin.spi.*;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataFileReader;
 import edu.harvard.iq.dataverse.ingest.tabulardata.spi.TabularDataFileReaderSpi;
 import edu.harvard.iq.dataverse.ingest.tabulardata.TabularDataIngest;
 import edu.harvard.iq.dataverse.rserve.*;
-import javax.naming.Context;
-import javax.naming.InitialContext;
-import javax.naming.NamingException;
 
 
-import org.apache.commons.lang.RandomStringUtils;
-import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang3.RandomStringUtils;
+
 /**
  * Dataverse 4.0 implementation of <code>TabularDataFileReader</code> for the 
  * RData Binary Format.
@@ -88,10 +83,10 @@ public class RDATAFileReader extends TabularDataFileReader {
   static private String RSCRIPT_WRITE_DVN_TABLE = "";
   
   // RServe static variables
-  private static String RSERVE_HOST = System.getProperty("dataverse.rserve.host");
-  private static String RSERVE_USER = System.getProperty("dataverse.rserve.user");
-  private static String RSERVE_PASSWORD = System.getProperty("dataverse.rserve.pwrd");
-  private static int RSERVE_PORT;
+  private final String RSERVE_HOST;
+  private final int RSERVE_PORT;
+  private final String RSERVE_USER;
+  private final String RSERVE_PASSWORD;
   
   // TODO: 
   // we're not using these time/data formats for anything, are we?
@@ -138,24 +133,6 @@ public class RDATAFileReader extends TabularDataFileReader {
    * This is primarily to construct the R-Script
    */
   static {
-    /*
-     * Set defaults fallbacks for class properties
-     */
-    if (RSERVE_HOST == null)
-      RSERVE_HOST = "localhost";
-
-    if (RSERVE_USER == null)
-      RSERVE_USER = "rserve";
-
-    if (RSERVE_PASSWORD == null)
-      RSERVE_PASSWORD = "rserve";
-
-    if (System.getProperty("dataverse.ingest.rserve.port") == null)
-      RSERVE_PORT = 6311;
-    else
-      RSERVE_PORT = Integer.parseInt(System.getProperty("dataverse.rserve.port"));
-
-    
     // Load R Scripts into memory, so that we can run them via R-serve
     RSCRIPT_WRITE_DVN_TABLE = readLocalResource("scripts/write.table.R");
     RSCRIPT_GET_DATASET = readLocalResource("scripts/get.dataset.R");
@@ -451,7 +428,20 @@ public class RDATAFileReader extends TabularDataFileReader {
 
     super(originator);
     
-    
+    // These settings have sane defaults in resources/META-INF/microprofile-config.properties,
+    // ready to be overridden by a sysadmin. Every time a file would be read with this file reader,
+    // a new reader will be created, reading from the cached config source settings with minimal overhead.
+    this.RSERVE_HOST = JvmSettings.RSERVE_HOST.lookup();
+    int port;
+    try {
+      port = JvmSettings.RSERVE_PORT.lookup(Integer.class);
+    } catch (IllegalArgumentException e) {
+      LOG.log(Level.SEVERE, "Could not parse value for " + JvmSettings.RSERVE_PORT.getScopedKey() + ", defaulting to 6311", e);
+      port = 6311;
+    }
+    this.RSERVE_PORT = port;
+    this.RSERVE_USER = JvmSettings.RSERVE_USER.lookup();
+    this.RSERVE_PASSWORD = JvmSettings.RSERVE_PASSWORD.lookup();
 
     LOG.fine("RDATAFileReader: INSIDE RDATAFileReader");
 
@@ -629,25 +619,17 @@ public class RDATAFileReader extends TabularDataFileReader {
             //mDataTypes = fileInformation.at("dataTypes").asStrings();
 
             // Initialize variables: 
-            List<DataVariable> variableList = new ArrayList<DataVariable>();
+            List<DataVariable> variableList = new ArrayList<>();
 
             for (String varName : variableNames) {
-                DataVariable dv = new DataVariable();
+                DataVariable dv = new DataVariable(varQnty, dataTable);
                 dv.setName(varName);
                 dv.setLabel(varName);
                 // TODO:
                 // Check if variables have real descriptive labels defined, 
                 // via the mechanismm provided by that special optional package... 
-                // (?) -- L.A. 
-                dv.setInvalidRanges(new ArrayList());
-                dv.setSummaryStatistics(new ArrayList());
-                dv.setUnf("UNF:6:XYZXYZXYZ");
-                dv.setCategories(new ArrayList());
+                // (?) -- L.A.
                 variableList.add(dv);
-
-                dv.setFileOrder(varQnty);
-
-                dv.setDataTable(dataTable);
 
                 // variableLabels.put(varName, varName);
                 // variableNameList.add(varName);
@@ -751,8 +733,8 @@ public class RDATAFileReader extends TabularDataFileReader {
                 LOG.fine("variable type name: " + variableTypeName);
                 LOG.fine("variable format: " + variableFormat);
 
-                for (int i = 0; i < variableLevels.length; i++) {
-                    LOG.fine("variable level: " + variableLevels[i]);
+                for (String variableLevel : variableLevels) {
+                    LOG.fine("variable level: " + variableLevel);
                 }
 
                 //dataTable.getDataVariables().get(k).setFormatSchema("RDATA");
@@ -790,6 +772,7 @@ public class RDATAFileReader extends TabularDataFileReader {
                     if (variableLevels != null && variableLevels.length > 0) {
                         // yes, this is a factor, with levels defined.
                         LOG.fine("this is a factor.");
+                        dataTable.getDataVariables().get(k).setFactor(true);
                         boolean ordered = false; 
                         
                         if (variableFormat != null && variableFormat.equals("ordered")) {

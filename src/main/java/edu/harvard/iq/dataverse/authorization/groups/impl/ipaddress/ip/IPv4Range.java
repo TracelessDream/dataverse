@@ -1,10 +1,13 @@
 package edu.harvard.iq.dataverse.authorization.groups.impl.ipaddress.ip;
 
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.Id;
-import javax.persistence.NamedQueries;
-import javax.persistence.NamedQuery;
+import java.math.BigInteger;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.NamedQueries;
+import jakarta.persistence.NamedQuery;
+import jakarta.persistence.Table;
 
 /**
  * A range of IPv4 addresses. In order to make SQL querying efficient, the actual fields
@@ -14,6 +17,7 @@ import javax.persistence.NamedQuery;
  * 
  * @author michael
  */
+@Table(indexes = {@Index(columnList="owner_id")})
 @NamedQueries({
     @NamedQuery( name="IPv4Range.findAllContainingAddressAsLong",
             query="SELECT r FROM IPv4Range r WHERE r.bottomAsLong<=:addressAsLong AND r.topAsLong>=:addressAsLong"),
@@ -27,17 +31,17 @@ public class IPv4Range extends IpAddressRange implements java.io.Serializable {
     @GeneratedValue
     Long id;
     
-    /** The most significant bits of {@code this} range's top addre, i.e the first two numbers of the IP address */
-    long topAsLong;
+    /** The most significant bits of {@code this} range's top address, i.e the first two numbers of the IP address */
+    BigInteger topAsLong;
     
     /** The least significant bits, i.e the last tow numbers of the IP address */
-    long bottomAsLong;
+    BigInteger bottomAsLong;
     
     public IPv4Range(){}
     
     public IPv4Range(IPv4Address bottom, IPv4Address top) {
-        topAsLong = top.toLong();
-        bottomAsLong = bottom.toLong(); 
+        topAsLong = top.toBigInteger();
+        bottomAsLong = bottom.toBigInteger(); 
     }
     
     @Override
@@ -46,7 +50,7 @@ public class IPv4Range extends IpAddressRange implements java.io.Serializable {
     }
     
     public void setTop( IPv4Address aNewTop ) {
-        setTopAsLong( aNewTop.toLong() );
+        setTopAsLong( aNewTop.toBigInteger() );
     }
     
     @Override
@@ -55,27 +59,28 @@ public class IPv4Range extends IpAddressRange implements java.io.Serializable {
     }
     
     public void setBottom( IPv4Address aNewBottom ) {
-        setTopAsLong( aNewBottom.toLong() );
+        setTopAsLong( aNewBottom.toBigInteger() );
     }
     
-    public long getTopAsLong() {
+    public BigInteger getTopAsLong() {
         return topAsLong;
     }
 
-    public void setTopAsLong(long topAsLong) {
+    public void setTopAsLong(BigInteger topAsLong) {
         this.topAsLong = topAsLong;
     }
 
-    public long getBottomAsLong() {
+    public BigInteger getBottomAsLong() {
         return bottomAsLong;
     }
 
-    public void setBottomAsLong(long bottomAsLong) {
+    public void setBottomAsLong(BigInteger bottomAsLong) {
         this.bottomAsLong = bottomAsLong;
     }
 
     @Override
     public Boolean contains(IpAddress anAddress) {
+        if ( anAddress == null ) return null;
         if ( anAddress instanceof IPv4Address ) {
             IPv4Address adr = (IPv4Address) anAddress;
             return getBottom().compareTo(adr)<=0 && getTop().compareTo(adr)>=0;

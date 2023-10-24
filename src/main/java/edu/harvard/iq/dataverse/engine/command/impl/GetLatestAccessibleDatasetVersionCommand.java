@@ -9,44 +9,38 @@ package edu.harvard.iq.dataverse.engine.command.impl;
 import edu.harvard.iq.dataverse.Dataset;
 import edu.harvard.iq.dataverse.DatasetVersion;
 import edu.harvard.iq.dataverse.authorization.Permission;
-import edu.harvard.iq.dataverse.authorization.users.User;
 import edu.harvard.iq.dataverse.engine.command.AbstractCommand;
 import edu.harvard.iq.dataverse.engine.command.CommandContext;
+import edu.harvard.iq.dataverse.engine.command.DataverseRequest;
 import edu.harvard.iq.dataverse.engine.command.RequiredPermissions;
 import edu.harvard.iq.dataverse.engine.command.exception.CommandException;
-import edu.harvard.iq.dataverse.engine.command.exception.PermissionException;
 
 /**
  * Get the latest version of a dataset a user can view.
+ *
  * @author Naomi
  */
 // No permission needed to view published dvObjects
 @RequiredPermissions({})
-public class GetLatestAccessibleDatasetVersionCommand extends AbstractCommand<DatasetVersion>{
+public class GetLatestAccessibleDatasetVersionCommand extends AbstractCommand<DatasetVersion> {
     private final Dataset ds;
-    private final User u;
+    private final boolean includeDeaccessioned;
 
-    public GetLatestAccessibleDatasetVersionCommand(User aUser, Dataset anAffectedDataset) {
-        super(aUser, anAffectedDataset);
-        u = aUser;
+    public GetLatestAccessibleDatasetVersionCommand(DataverseRequest aRequest, Dataset anAffectedDataset) {
+        this(aRequest, anAffectedDataset, false);
+    }
+
+    public GetLatestAccessibleDatasetVersionCommand(DataverseRequest aRequest, Dataset anAffectedDataset, boolean includeDeaccessioned) {
+        super(aRequest, anAffectedDataset);
         ds = anAffectedDataset;
+        this.includeDeaccessioned = includeDeaccessioned;
     }
 
     @Override
     public DatasetVersion execute(CommandContext ctxt) throws CommandException {
-        DatasetVersion d = null;
-        
-        try {
-            d = ctxt.engine().submit(new GetDraftDatasetVersionCommand(u, ds));
-        } catch(PermissionException ex) {}
-        
-        if (d == null || d.getId() == null) {
-            d = ctxt.engine().submit(new GetLatestPublishedDatasetVersionCommand(u,ds));
+        if (ds.getLatestVersion().isDraft() && ctxt.permissions().requestOn(getRequest(), ds).has(Permission.ViewUnpublishedDataset)) {
+            return ctxt.engine().submit(new GetDraftDatasetVersionCommand(getRequest(), ds));
         }
-        
-        return d;
+        return ctxt.engine().submit(new GetLatestPublishedDatasetVersionCommand(getRequest(), ds, includeDeaccessioned));
     }
-    
-    
-    
 }

@@ -26,15 +26,20 @@ import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.faces.application.FacesMessage;
-import javax.faces.event.ActionEvent;
-import javax.faces.view.ViewScoped;
-import javax.inject.Inject;
-import javax.inject.Named;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-import org.apache.commons.lang.StringUtils;
+import jakarta.ejb.EJB;
+import jakarta.faces.application.FacesMessage;
+import jakarta.faces.event.ActionEvent;
+import jakarta.faces.view.ViewScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import jakarta.faces.event.AbortProcessingException;
+import jakarta.faces.event.AjaxBehaviorEvent;
+import org.apache.commons.text.StringEscapeUtils;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  *
@@ -56,6 +61,8 @@ public class RolePermissionFragment implements java.io.Serializable {
     AuthenticationServiceBean authenticationService;
     @EJB
     EjbDataverseEngine commandEngine;
+    @Inject
+    DataverseRequestServiceBean dvRequestService;
 
     @PersistenceContext(unitName = "VDCNet-ejbPU")
     EntityManager em;
@@ -87,11 +94,12 @@ public class RolePermissionFragment implements java.io.Serializable {
         this.inheritAssignments = inheritAssignments;
     }
 
-    public void updatePermissionRoot(javax.faces.event.AjaxBehaviorEvent event) throws javax.faces.event.AbortProcessingException {
+    public void updatePermissionRoot(AjaxBehaviorEvent event) throws AbortProcessingException {
         try {
             dvObject = commandEngine.submit(
-                    new UpdatePermissionRootCommand(!inheritAssignments, session.getUser(),
-                                                     (Dataverse) dvObject));
+                    new UpdatePermissionRootCommand(!inheritAssignments, 
+                                                    dvRequestService.getDataverseRequest(),
+                                                    (Dataverse) dvObject));
             inheritAssignments = !((DvObjectContainer) dvObject).isPermissionRoot();
         } catch (CommandException ex) {
             Logger.getLogger(RolePermissionFragment.class.getName()).log(Level.SEVERE, null, ex);
@@ -103,7 +111,7 @@ public class RolePermissionFragment implements java.io.Serializable {
     private RoleAssignee assignRoleRoleAssignee; // used if input accepts a RoleAssignee through a converter
     private Long assignRoleRoleId;
 
-    private List<String> identifierList = new ArrayList();
+    private final List<String> identifierList = new ArrayList<>();
 
     public List<String> completeIdentifier(String query) {
         if (identifierList.isEmpty()) {
@@ -111,7 +119,7 @@ public class RolePermissionFragment implements java.io.Serializable {
                 identifierList.add(au.getIdentifier());
             }
         }
-        List<String> returnList = new ArrayList();
+        List<String> returnList = new ArrayList<>();
         for (String identifier : identifierList) {
             if (identifier.contains(query)) {
                 returnList.add(identifier);
@@ -120,7 +128,7 @@ public class RolePermissionFragment implements java.io.Serializable {
         return returnList;
     }
     
-    private List<RoleAssignee> roleAssigneeList = new ArrayList();
+    private final List<RoleAssignee> roleAssigneeList = new ArrayList<>();
     
     public List<RoleAssignee> completeRoleAssignee(String query) {
         if (roleAssigneeList.isEmpty()) {
@@ -128,7 +136,7 @@ public class RolePermissionFragment implements java.io.Serializable {
                 roleAssigneeList.add(au);
             }
         }
-        List<RoleAssignee> returnList = new ArrayList();
+        List<RoleAssignee> returnList = new ArrayList<>();
         for (RoleAssignee ra : roleAssigneeList) {
             // @todo unsure if containsIgnore case will work for all locales
             if (StringUtils.containsIgnoreCase(ra.getDisplayInfo().getTitle(),query)) {
@@ -183,23 +191,26 @@ public class RolePermissionFragment implements java.io.Serializable {
 
     private void assignRole(RoleAssignee ra, DataverseRole r) {
         try {
-            commandEngine.submit(new AssignRoleCommand(ra, r, dvObject, session.getUser()));
-            JH.addMessage(FacesMessage.SEVERITY_INFO, "Role " + r.getName() + " assigned to " + ra.getDisplayInfo().getTitle() + " on " + dvObject.getDisplayName());
+            String privateUrlToken = null;
+            commandEngine.submit(new AssignRoleCommand(ra, r, dvObject, dvRequestService.getDataverseRequest(), privateUrlToken));
+            JH.addMessage(FacesMessage.SEVERITY_INFO,
+                BundleUtil.getStringFromBundle("permission.roleAssignedToOn" ,
+                        Arrays.asList( r.getName() , ra.getDisplayInfo().getTitle() , StringEscapeUtils.escapeHtml4(dvObject.getDisplayName()) )) );
         } catch (CommandException ex) {
-            JH.addMessage(FacesMessage.SEVERITY_ERROR, "Can't assign role: " + ex.getMessage());
+            JH.addMessage(FacesMessage.SEVERITY_ERROR, BundleUtil.getStringFromBundle("permission.cannotAssignRole" , Arrays.asList( ex.getMessage())));
         }
     }
 
     public void revokeRole(Long roleAssignmentId) {
         try {
-            commandEngine.submit(new RevokeRoleCommand(em.find(RoleAssignment.class, roleAssignmentId), session.getUser()));
-            JH.addMessage(FacesMessage.SEVERITY_INFO, "Role assignment revoked successfully");
+            commandEngine.submit(new RevokeRoleCommand(em.find(RoleAssignment.class, roleAssignmentId), dvRequestService.getDataverseRequest()));
+            JH.addMessage(FacesMessage.SEVERITY_INFO, BundleUtil.getStringFromBundle("permission.roleRevoked" ));
         } catch (PermissionException ex) {
-            JH.addMessage(FacesMessage.SEVERITY_ERROR, "Cannot revoke role assignment - you're missing permission", ex.getRequiredPermissions().toString());
+            JH.addMessage(FacesMessage.SEVERITY_ERROR, BundleUtil.getStringFromBundle("permission.cannotRevokeRole1" , Arrays.asList(ex.getRequiredPermissions().toString())));
             logger.log(Level.SEVERE, "Error revoking role assignment: " + ex.getMessage(), ex);
 
         } catch (CommandException ex) {
-            JH.addMessage(FacesMessage.SEVERITY_ERROR, "Cannot revoke role assignment: " + ex.getMessage());
+            JH.addMessage(FacesMessage.SEVERITY_ERROR, BundleUtil.getStringFromBundle("permission.cannotRevokeRole2" , Arrays.asList( ex.getMessage())));
             logger.log(Level.SEVERE, "Error revoking role assignment: " + ex.getMessage(), ex);
         }
     }
@@ -276,7 +287,7 @@ public class RolePermissionFragment implements java.io.Serializable {
         if (dvObject != null) {
             return roleService.findByOwnerId(dvObject.getId());
         }
-        return new ArrayList();
+        return new ArrayList<>();
     }
 
     public void createNewRole(ActionEvent e) {
@@ -307,10 +318,10 @@ public class RolePermissionFragment implements java.io.Serializable {
                 role.addPermission(Permission.valueOf(pmsnStr));
             }
             try {
-                setRole(commandEngine.submit(new CreateRoleCommand(role, session.getUser(), (Dataverse) role.getOwner())));
-                JH.addMessage(FacesMessage.SEVERITY_INFO, "Role '" + role.getName() + "' saved", "");
+                setRole(commandEngine.submit(new CreateRoleCommand(role, dvRequestService.getDataverseRequest(), (Dataverse) role.getOwner())));
+                JH.addMessage(FacesMessage.SEVERITY_INFO, BundleUtil.getStringFromBundle("permission.roleSave" , Arrays.asList( role.getName() )));
             } catch (CommandException ex) {
-                JH.addMessage(FacesMessage.SEVERITY_ERROR, "Cannot save role", ex.getMessage());
+                JH.addMessage(FacesMessage.SEVERITY_ERROR, BundleUtil.getStringFromBundle("permission.cannotSaveRole" , Arrays.asList( ex.getMessage())));
                 logger.log(Level.SEVERE, "Saving role failed", ex);
             }
         }

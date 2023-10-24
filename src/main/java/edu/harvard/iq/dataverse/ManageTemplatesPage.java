@@ -1,29 +1,30 @@
 package edu.harvard.iq.dataverse;
 
-import edu.harvard.iq.dataverse.authorization.users.AuthenticatedUser;
 import edu.harvard.iq.dataverse.engine.command.exception.CommandException;
 import edu.harvard.iq.dataverse.engine.command.impl.CreateTemplateCommand;
 import edu.harvard.iq.dataverse.engine.command.impl.DeleteTemplateCommand;
 import edu.harvard.iq.dataverse.engine.command.impl.UpdateDataverseCommand;
 import edu.harvard.iq.dataverse.engine.command.impl.UpdateDataverseTemplateRootCommand;
+import edu.harvard.iq.dataverse.license.LicenseServiceBean;
 import edu.harvard.iq.dataverse.util.JsfHelper;
 import static edu.harvard.iq.dataverse.util.JsfHelper.JH;
 import java.sql.Timestamp;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.ejb.EJB;
-import javax.faces.application.FacesMessage;
-import javax.faces.event.ActionEvent;
-import javax.faces.view.ViewScoped;
-import javax.inject.Inject;
-import javax.inject.Named;
-import javax.persistence.EntityManager;
-import javax.persistence.PersistenceContext;
-
+import jakarta.ejb.EJB;
+import jakarta.faces.application.FacesMessage;
+import jakarta.faces.event.ActionEvent;
+import jakarta.faces.view.ViewScoped;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import jakarta.faces.event.AbortProcessingException;
+import jakarta.faces.event.AjaxBehaviorEvent;
 /**
  *
  * @author skraffmiller
@@ -52,6 +53,18 @@ public class ManageTemplatesPage implements java.io.Serializable {
 
     @Inject
     DataverseSession session;
+    
+    @Inject
+    DataverseRequestServiceBean dvRequestService;
+    
+    @Inject
+    PermissionsWrapper permissionsWrapper;
+    
+    @Inject
+    LicenseServiceBean licenseServiceBean;
+    
+    @Inject
+    SettingsWrapper settingsWrapper;
 
     private List<Template> templates;
     private Dataverse dataverse;
@@ -61,8 +74,14 @@ public class ManageTemplatesPage implements java.io.Serializable {
 
     private Template selectedTemplate = null;
 
-    public void init() {
+    public String init() {
         dataverse = dvService.find(dataverseId);
+        if (dataverse == null) {
+            return permissionsWrapper.notFound();
+        }
+        if (!permissionsWrapper.canIssueCommand(dataverse, UpdateDataverseCommand.class)) {
+            return permissionsWrapper.notAuthorized();
+        }  
         dvpage.setDataverse(dataverse);
         if (dataverse.getOwner() != null && dataverse.getMetadataBlocks().equals(dataverse.getOwner().getMetadataBlocks())){
            setInheritTemplatesAllowed(true); 
@@ -83,38 +102,40 @@ public class ManageTemplatesPage implements java.io.Serializable {
             templates.add(ct);
         }
         if (!templates.isEmpty()){
-             JH.addMessage(FacesMessage.SEVERITY_INFO, JH.localize("dataset.manageTemplates.info.message.notEmptyTable"));
+             JH.addMessage(FacesMessage.SEVERITY_INFO, BundleUtil.getStringFromBundle("dataset.message.manageTemplates.label"), BundleUtil.getStringFromBundle("dataset.message.manageTemplates.message"));
         }
-
+        return null;
     }
 
     public void makeDefault(Template templateIn) {
         dataverse.setDefaultTemplate(templateIn);
-        saveDataverse("The template has been selected as the default template for this dataverse");
+        saveDataverse(BundleUtil.getStringFromBundle("template.makeDefault"));
     }
 
     public void unselectDefault(Template templateIn) {
         dataverse.setDefaultTemplate(null);
-        saveDataverse("The template has been removed as the default template for this dataverse");
+        saveDataverse(BundleUtil.getStringFromBundle("template.unselectDefault"));
     }
 
     public String cloneTemplate(Template templateIn) {
         Template newOne = templateIn.cloneNewTemplate(templateIn);
-        String name = "Copy of " + templateIn.getName();
+        String name = BundleUtil.getStringFromBundle("page.copy") +" " + templateIn.getName();
         newOne.setName(name);
         newOne.setUsageCount(new Long(0));
         newOne.setCreateTime(new Timestamp(new Date().getTime()));
-        dataverse.getTemplates().add(newOne);
-        templates.add(newOne);
+        newOne.setDataverse(dataverse);
+
         Template created;
         try {
-            created = engineService.submit(new CreateTemplateCommand(newOne, session.getUser(), dataverse));
+            created = engineService.submit(new CreateTemplateCommand(newOne, dvRequestService.getDataverseRequest(), dataverse));
+            dataverse.getTemplates().add(created);
+            templates.add(created);
             saveDataverse("");
-            String msg =  "The template has been copied";
+            String msg =  BundleUtil.getStringFromBundle("template.clone");//"The template has been copied";
             JsfHelper.addFlashMessage(msg);
-            return "/template.xhtml?id=" + created.getId() + "&ownerId=" + dataverse.getId() + "&editMode=METADATA&faces-redirect=true";
+            return "/template.xhtml?id=" + created.getId() + "&ownerId=" + dataverse.getId() + "&editMode=CLONE&faces-redirect=true";
         } catch (CommandException ex) {
-            JH.addMessage(FacesMessage.SEVERITY_FATAL, "Template could not be copied. " );
+            JH.addMessage(FacesMessage.SEVERITY_FATAL, BundleUtil.getStringFromBundle("template.clone.error"));//"Template could not be copied. " 
         }
         return "";
     }
@@ -132,10 +153,10 @@ public class ManageTemplatesPage implements java.io.Serializable {
             System.out.print("selected template is null");
         }
         try {
-            engineService.submit(new DeleteTemplateCommand(session.getUser(), getDataverse(), selectedTemplate, dataverseWDefaultTemplate  ));
-            JsfHelper.addFlashMessage("The template has been deleted");
+            engineService.submit(new DeleteTemplateCommand(dvRequestService.getDataverseRequest(), getDataverse(), selectedTemplate, dataverseWDefaultTemplate  ));
+            JsfHelper.addFlashMessage(BundleUtil.getStringFromBundle("template.delete"));//("The template has been deleted");
         } catch (CommandException ex) {
-            String failMessage = "The dataset template cannot be deleted.";
+            String failMessage = BundleUtil.getStringFromBundle("template.delete.error");//"The dataset template cannot be deleted.";
             JH.addMessage(FacesMessage.SEVERITY_FATAL, failMessage);
         }
     }
@@ -146,19 +167,19 @@ public class ManageTemplatesPage implements java.io.Serializable {
 
     private void saveDataverse(String successMessage) {
         if (successMessage.isEmpty()) {
-            successMessage = "Template data updated";
+            successMessage = BundleUtil.getStringFromBundle("template.update");//"Template data updated";
         }
         try {
-            engineService.submit(new UpdateDataverseCommand(getDataverse(), null, null, session.getUser(), null));
+            engineService.submit(new UpdateDataverseCommand(getDataverse(), null, null, dvRequestService.getDataverseRequest(), null));
             //JH.addMessage(FacesMessage.SEVERITY_INFO, successMessage);
             JsfHelper.addFlashMessage(successMessage);
         } catch (CommandException ex) {
-            String failMessage = "Template update failed";
-            if(successMessage.equals("The template has been deleted")){
-                failMessage = "The dataset template cannot be deleted.";
+            String failMessage = BundleUtil.getStringFromBundle("template.update.error");//"Template update failed";
+            if(successMessage.equals(BundleUtil.getStringFromBundle("template.delete"))){
+                failMessage = BundleUtil.getStringFromBundle("template.delete.error");//"The dataset template cannot be deleted.";
             }
-            if(successMessage.equals("The template has been selected as the default template for this dataverse")){
-                failMessage = "The dataset template cannot be made default.";
+            if(successMessage.equals(BundleUtil.getStringFromBundle("template.makeDefault"))){
+                failMessage = BundleUtil.getStringFromBundle("template.makeDefault.error");//"The dataset template cannot be made default.";
             }
             JH.addMessage(FacesMessage.SEVERITY_FATAL, failMessage);
         }
@@ -214,11 +235,11 @@ public class ManageTemplatesPage implements java.io.Serializable {
 
     public void viewSelectedTemplate(Template selectedTemplate) {
         this.selectedTemplate = selectedTemplate;
-        this.selectedTemplate.setMetadataValueBlocks();
+        this.selectedTemplate.setMetadataValueBlocks(settingsWrapper.getSystemMetadataBlocks());
         tempPage.setTemplate(selectedTemplate);
     }
 
-    public String updateTemplatesRoot(javax.faces.event.AjaxBehaviorEvent event) throws javax.faces.event.AbortProcessingException {
+    public String updateTemplatesRoot(AjaxBehaviorEvent event) throws AbortProcessingException {
         try {
             if (dataverse.getOwner() != null) {
                 if (isInheritTemplatesValue() && dataverse.getDefaultTemplate() == null && dataverse.getOwner().getDefaultTemplate() != null) {
@@ -235,7 +256,7 @@ public class ManageTemplatesPage implements java.io.Serializable {
                 }
             }
 
-            dataverse = engineService.submit(new UpdateDataverseTemplateRootCommand(!isInheritTemplatesValue(), session.getUser(), getDataverse()));
+            dataverse = engineService.submit(new UpdateDataverseTemplateRootCommand(!isInheritTemplatesValue(), dvRequestService.getDataverseRequest(), getDataverse()));
             init();
             return "";
         } catch (CommandException ex) {

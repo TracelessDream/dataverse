@@ -7,16 +7,16 @@ package edu.harvard.iq.dataverse.ingest;
 
 import edu.harvard.iq.dataverse.DataFile;
 import java.io.Serializable;
-import javax.persistence.CascadeType;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.ManyToOne;
-import javax.persistence.OneToOne;
-import javax.persistence.Table;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToOne;
+import jakarta.persistence.Table;
 
 /**
  *
@@ -38,9 +38,6 @@ public class IngestRequest implements Serializable {
         this.id = id;
     }
 
-    //@ManyToOne
-    //@JoinColumn(nullable=false)
-    
     @OneToOne(cascade={CascadeType.MERGE,CascadeType.PERSIST})
     @JoinColumn(name="datafile_id")
     private DataFile dataFile;
@@ -50,6 +47,15 @@ public class IngestRequest implements Serializable {
     private String controlCard;
     
     private String labelsFile; 
+    
+    private Boolean forceTypeCheck;
+    
+    public IngestRequest() {
+    }
+    
+    public IngestRequest(DataFile dataFile) {
+        this.dataFile = dataFile;
+    }
     
     public DataFile getDataFile() {
         return dataFile;
@@ -81,6 +87,17 @@ public class IngestRequest implements Serializable {
     
     public void setLabelsFile(String labelsFile) {
         this.labelsFile = labelsFile; 
+    }
+    
+    public void setForceTypeCheck(boolean forceTypeCheck) {
+        this.forceTypeCheck = forceTypeCheck;
+    }
+    
+    public boolean isForceTypeCheck() {
+        if (forceTypeCheck != null) {
+            return forceTypeCheck;
+        }
+        return false;
     }
     
     @Override

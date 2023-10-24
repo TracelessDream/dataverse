@@ -25,22 +25,30 @@ package edu.harvard.iq.dataverse.rserve;
  * @author Leonid Andreev
  */
 import edu.harvard.iq.dataverse.datavariable.DataVariable;
-import java.util.*;
-import java.util.logging.*;
-import org.apache.commons.lang.*;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Logger;
+
+import org.apache.commons.lang3.StringUtils;
 
 
 public class RJobRequest {
 
-    private static Logger dbgLog = Logger.getLogger(RJobRequest.class.getPackage().getName());
+    private static final Logger dbgLog = Logger.getLogger(RJobRequest.class.getCanonicalName());
 
 
-    private Map<String,String> variableFormats = new HashMap<String,String>(); 
+    private Map<String,String> variableFormats = new HashMap<>(); 
     
     /**
      * 4 parameter Constructor:
+     * @param dv
+     * @param vts
+     * @param categoryOrders
      */
-
     public RJobRequest(
             List <DataVariable> dv, 
             Map <String, Map<String, String>> vts,
@@ -135,110 +143,39 @@ public class RJobRequest {
 
     /**
      * getVariableTypes()
-     * @return    An arrary of variable types(0, 1, 2, 3)
+     * @return    An array of variable types(0, 1, 2, 3)
      * (3 is for Boolean)
      */
-    
     public int[] getVariableTypes() {
-        
-        List<Integer> rw = new ArrayList<Integer>();
-        for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
+        List<Integer> rw = new ArrayList<>();
+        for (DataVariable dv : dataVariablesForRequest) {
             if (!StringUtils.isEmpty(dv.getFormatCategory())){
                 if (dv.getFormatCategory().toLowerCase().equals("date") ||
-                    (dv.getFormatCategory().toLowerCase().equals("time"))){
+                        (dv.getFormatCategory().toLowerCase().equals("time"))){
                     rw.add(0);
+                    continue;
                 } else if (dv.getFormatCategory().equals("Boolean")) {
                     rw.add(3); 
-                } else {
-                    if (dv.isTypeNumeric()) {
-                        if (dv.getInterval() == null) {
-                            rw.add(2);
-                        } else {
-                            if (dv.isIntervalContinuous()) {
-                                rw.add(2);
-                            } else {
-                                rw.add(1);
-                            }
-                        }
-                    } else if (dv.isTypeCharacter()) {
-                        rw.add(0);
-                    }
-                }
-            } else {
-                if (dv.isTypeNumeric()) {
-                    if (dv.getInterval() == null) {
-                        rw.add(2);
-                    } else {
-                        if (dv.isIntervalContinuous()) {
-                            rw.add(2);
-                        } else {
-                            rw.add(1);
-                        }
-                    }
-                } else if (dv.isTypeCharacter()) {
-                    rw.add(0);
+                    continue;
                 }
             }
+            
+            if (dv.isTypeNumeric()) {
+                if (dv.getInterval() == null || dv.isIntervalContinuous()) {
+                    rw.add(2);
+                } else {
+                    rw.add(1);
+                }
+            } else if (dv.isTypeCharacter()) {
+                rw.add(0);
+            }
         }
-        Integer[]tmp = (Integer[])rw.toArray(new Integer[rw.size()]);
-        dbgLog.fine("vartype="+ StringUtils.join(tmp, ", "));
-        int[] variableTypes=new int[tmp.length];
-        for (int j=0;j<tmp.length;j++){
-            variableTypes[j]= tmp[j];
+        int[] variableTypes = new int[rw.size()];
+        for (int j=0; j<rw.size(); j++){
+            variableTypes[j] = rw.get(j);
         }
         return variableTypes;
     }
-    
-    /*
-     * TODO: get rid of this? 
-     * -- L.A. 4.0 alpha 1
-    */
-    
-    public List<String> getVariableTypesAsString() {
-        
-        List<String> rw = new ArrayList<String>();
-        for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
-            if (!StringUtils.isEmpty(dv.getFormatCategory())){
-                if (dv.getFormatCategory().toLowerCase().equals("date") ||
-                    dv.getFormatCategory().toLowerCase().equals("time")){
-                    rw.add("0");
-                } else {
-                    if (dv.isTypeNumeric()) {
-                        if (dv.getInterval() == null) {
-                            rw.add("2");
-                        } else {
-                            if (dv.isIntervalContinuous()) {
-                                rw.add("2");
-                            } else {
-                                rw.add("1");
-                            }
-                        }
-                    } else if (dv.isTypeCharacter()) {
-                        rw.add("0");
-                    }
-                }
-            } else {
-                if (dv.isTypeNumeric()) {
-                    if (dv.getInterval() == null) {
-                        rw.add("2");
-                    } else {
-                        if (dv.isIntervalContinuous()) {
-                            rw.add("2");
-                        } else {
-                            rw.add("1");
-                        }
-                    }
-                } else if (dv.isTypeCharacter()) {
-                    rw.add("0");
-                }
-            }
-        }
-        return rw;
-    }
-
-
 
     /**
      * Getter for property variable formats
@@ -247,9 +184,9 @@ public class RJobRequest {
      *            its corresponding type, either time or date
      */
     public Map<String, String> getVariableFormats() {
-        Map<String, String> variableFormats=new LinkedHashMap<String, String>();
+        Map<String, String> variableFormats = new LinkedHashMap<>();
         for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
+            DataVariable dv = dataVariablesForRequest.get(i);
 
             //dbgLog.fine(String.format("DvnRJobRequest: column[%d] schema = %s", i, dv.getFormatSchema()));
             dbgLog.fine(String.format("DvnRJobRequest: column[%d] category = %s", i, dv.getFormatCategory()));
@@ -358,13 +295,12 @@ public class RJobRequest {
     public String[] getVariableNames() {
         String[] variableNames=null;
         
-        List<String> rw = new ArrayList();
-        for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
-                rw.add(dv.getName());
+        List<String> rw = new ArrayList<>();
+        for (DataVariable dv : dataVariablesForRequest) {
+            rw.add(dv.getName());
         }
         
-        variableNames = (String[])rw.toArray(new String[rw.size()]);
+        variableNames = rw.toArray(new String[rw.size()]);
         return variableNames;
     }
     
@@ -392,7 +328,7 @@ public class RJobRequest {
     }
     
     public List<String> getFilteredVarNameSet(List<String> varIdSet){
-        List<String> varNameSet = new ArrayList<String>();
+        List<String> varNameSet = new ArrayList<>();
         for (String vid : varIdSet){
             dbgLog.fine("name list: vid="+vid);
             String raw = getVarIdToRawVarNameTable().get(vid);
@@ -415,18 +351,17 @@ public class RJobRequest {
     
     public String[] getVariableIds(){
         String[] variableIds=null;
-        List<String> rw = new ArrayList();
-        for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
-                rw.add("v"+dv.getId().toString());
+        List<String> rw = new ArrayList<>();
+        for (DataVariable dv : dataVariablesForRequest) {
+            rw.add("v"+dv.getId().toString());
         }
         
-        variableIds = (String[])rw.toArray(new String[rw.size()]);
+        variableIds = rw.toArray(new String[rw.size()]);
         return variableIds;
     }
 
     public Map<String, String> getVarIdToRawVarNameTable(){
-        Map<String, String> vi2rwn = new HashMap<String, String>();
+        Map<String, String> vi2rwn = new HashMap<>();
         
         for(DataVariable dv :dataVariablesForRequest){
             vi2rwn.put("v"+dv.getId(), dv.getName());
@@ -435,7 +370,7 @@ public class RJobRequest {
     }
 
     public Map<String, String> getRawVarNameToVarIdTable(){
-        Map<String, String> rwn2Id = new HashMap<String, String>();
+        Map<String, String> rwn2Id = new HashMap<>();
         
         for(DataVariable dv :dataVariablesForRequest){
             rwn2Id.put(dv.getName(), "v"+dv.getId());
@@ -444,7 +379,7 @@ public class RJobRequest {
     }
 
     public String[] getUpdatedVariableNames(){
-        List<String> tmp = new ArrayList<String>();
+        List<String> tmp = new ArrayList<>();
         if (!hasUnsafeVariableNames){
             // neither renemaed nor recoded vars
             return  getVariableNames();
@@ -460,13 +395,12 @@ public class RJobRequest {
      */
     public String[] getVariableLabels(){
         String [] variableLabels=null;
-        List<String> rw = new ArrayList();
-        for(int i=0;i < dataVariablesForRequest.size(); i++){
-            DataVariable dv = (DataVariable) dataVariablesForRequest.get(i);
+        List<String> rw = new ArrayList<>();
+        for (DataVariable dv : dataVariablesForRequest) {
                 rw.add(dv.getLabel());
         }
         
-        variableLabels = (String[])rw.toArray(new String[rw.size()]);
+        variableLabels = rw.toArray(new String[rw.size()]);
         return variableLabels;
     }
 

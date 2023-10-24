@@ -6,146 +6,117 @@
 
 package edu.harvard.iq.dataverse;
 
-import edu.harvard.iq.dataverse.settings.SettingsServiceBean;
+import edu.harvard.iq.dataverse.pidproviders.PermaLinkPidProviderServiceBean;
+import edu.harvard.iq.dataverse.util.BundleUtil;
+import static edu.harvard.iq.dataverse.util.StringUtil.isEmpty;
 import java.net.MalformedURLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.net.URL;
-import javax.ejb.EJB;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  *
  * @author skraffmiller
  */
 public class GlobalId implements java.io.Serializable {
+    
+    private static final Logger logger = Logger.getLogger(GlobalId.class.getName());
 
-    @EJB
-    SettingsServiceBean settingsService;
-
-    public GlobalId(String identifier) {
-        
-        // set the protocol, authority, and identifier via parsePersistentId        
-        if (!this.parsePersistentId(identifier)){
-            throw new IllegalArgumentException("Failed to parse identifier: " + identifier);
-        }
-    }
-
-    public GlobalId(String protocol, String authority, String identifier) {
+    public GlobalId(String protocol, String authority, String identifier, String separator, String urlPrefix, String providerName) {
         this.protocol = protocol;
         this.authority = authority;
         this.identifier = identifier;
+        if(separator!=null) {
+          this.separator = separator;
+        }
+        this.urlPrefix = urlPrefix;
+        this.managingProviderName = providerName;
     }
-
+    
+    // protocol the identifier system, e.g. "doi"
+    // authority the namespace that the authority manages in the identifier system
+    // identifier the local identifier part
     private String protocol;
     private String authority;
     private String identifier;
+    private String managingProviderName;
+    private String separator = "/";
+    private String urlPrefix;
 
+    /**
+     * Tests whether {@code this} instance has all the data required for a 
+     * global id.
+     * @return {@code true} iff all the fields are non-empty; {@code false} otherwise.
+     */
+    public boolean isComplete() {
+        return !(isEmpty(protocol)||isEmpty(authority)||isEmpty(identifier));
+    }
+    
     public String getProtocol() {
         return protocol;
-    }
-
-    public void setProtocol(String protocol) {
-        this.protocol = protocol;
     }
 
     public String getAuthority() {
         return authority;
     }
 
-    public void setAuthority(String authority) {
-        this.authority = authority;
-    }
-
     public String getIdentifier() {
         return identifier;
     }
-
-    public void setIdentifier(String identifier) {
-        this.identifier = identifier;
+    
+    public String getProvider() {
+        return managingProviderName;
     }
 
     public String toString() {
-        return protocol + ":" + authority + "/" + identifier;
+        return asString();
     }
     
-    public URL toURL() {
-        URL url = null;
-        try {
-            if (protocol.equals("doi")){
-               url = new URL("http://dx.doi.org/" + authority + "/" + identifier); 
-            } else {
-               url = new URL("http://hdl.handle.net/" + authority + "/" + identifier);  
-            }           
-        } catch (MalformedURLException ex) {
-            Logger.getLogger(GlobalId.class.getName()).log(Level.SEVERE, null, ex);
-        }       
-        return url;
-    }    
-
-    
-    /** 
-     *   Parse a Persistent Id and set the protocol, authority, and identifier
+    /**
+     * Concatenate the parts that make up a Global Identifier.
      * 
-     *   Example 1: doi:10.5072/FK2/BYM3IW
-     *       protocol: doi
-     *       authority: 10.5072/FK2
-     *       identifier: BYM3IW
-     * 
-     *   Example 2: hdl:1902.1/111012
-     *       protocol: hdl
-     *       authority: 1902.1
-     *       identifier: 111012
-     *
-     * @param persistentId
-     * 
+     * @return the Global Identifier, e.g. "doi:10.12345/67890"
      */
-    private boolean parsePersistentId(String persistentId){
-
-        if (persistentId==null){
-            return false;
-        } 
-        
-        String doiSeparator = "/";//settingsService.getValueForKey(SettingsServiceBean.Key.DoiSeparator, "/");
-        
-        // Looking for this split  
-        //  doi:10.5072/FK2/BYM3IW => (doi) (10.5072/FK2/BYM3IW)
-        //
-        //  or this one: (hdl) (1902.1/xxxxx)
-        //
-        String[] items = persistentId.split(":");
-        if (items.length != 2){
-            return false;
+    public String asString() {
+        if (protocol == null || authority == null || identifier == null) {
+            return "";
         }
-        String protocolPiece = items[0].toLowerCase();
-        
-        String[] pieces = items[1].split(doiSeparator);
-
-        // -----------------------------
-        // Is this a handle?
-        // -----------------------------
-        if ( pieces.length == 2 && protocolPiece.equals("hdl")){
-            // example: hdl:1902.1/111012
-            
-            this.protocol = protocolPiece;  // hdl
-            this.authority = pieces[0];     // 1902.1
-            this.identifier = pieces[1];    // 111012            
-            return true;
-                    
-        }else if (pieces.length == 3 && protocolPiece.equals("doi")){
-            // -----------------------------
-            // Is this a DOI?
-            // -----------------------------
-            // example: doi:10.5072/FK2/BYM3IW
-            
-            this.protocol = protocolPiece;  // doi
-            this.authority = pieces[0] + doiSeparator + pieces[1]; // "10.5072/FK2"
-            this.identifier = pieces[2]; // "BYM3IW"
-            return true;
+        return protocol + ":" + authority + separator + identifier;
+    }
+    
+    public String asURL() {
+        URL url = null;
+        if (identifier == null){
+            return null;
         }
-        
-        return false;
+        try {
+               url = new URL(urlPrefix + authority + separator + identifier);
+               return url.toExternalForm();
+        } catch (MalformedURLException ex) {
+            logger.log(Level.SEVERE, null, ex);
+        }
+        return null;
     }
 
-    
-    
+
+
+    /**
+     * Verifies that the pid only contains allowed characters.
+     *
+     * @param pidParam
+     * @return true if pid only contains allowed characters false if pid
+     * contains characters not specified in the allowed characters regex.
+     */
+    public static boolean verifyImportCharacters(String pidParam) {
+
+        Pattern p = Pattern.compile(BundleUtil.getStringFromBundle("pid.allowedCharacters"));
+        Matcher m = p.matcher(pidParam);
+
+        return m.matches();
+    }
+
+
 }
